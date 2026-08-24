@@ -17,7 +17,11 @@ Collect bounded real-world evidence for one Bluetooth playback endpoint cohort (
 
 - branch: `main`
 - remote: `origin` → `https://github.com/lgraak/resonance-signal.git`
-- working tree status before commit: expected staged evidence files only
+- branch: `main` at `f7d8c08`
+- HEAD commit: `f7d8c08 (Collect Bluetooth source availability evidence)`
+- working tree status at handoff: clean
+- remote state:
+  - `origin/main` at `f7d8c08`
 
 ## Completed Work
 
@@ -124,4 +128,3 @@ Removed:
   - repeat detection-time distribution,
   - restoration consistency to the same endpoint,
   - whether endpoint fallback to non-Bluetooth is stable and operator-observable.
-
