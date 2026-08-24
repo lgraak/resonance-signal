@@ -175,9 +175,20 @@
 - Added hardware-independent tests for enabled and disabled classifications, guarded source evidence, budgets, cooldown, unsupported format, panic, configuration identity mismatch, Config A-to-B invalidation, reset behavior, and the decision-versus-execution boundary.
 - Kept the runtime on its explicit recovery-disabled definition and retained decisions as advisory data only. No authorization is consumed, no automatic attempt is committed, and no owner, retry, timer, watcher, reconnect, or default-device-following behavior was added.
 
+## Milestone 6J: Operational recovery parameter design
+
+- Selected one finite shared automatic-attempt budget per recovery episode; stable failure classes control eligibility and typed prerequisites rather than owning independent counters that could multiply the episode ceiling.
+- Defined one budget unit as one supervisor commitment to automatic owner creation, including construction and startup failure, while repeated identical failures advance backoff pressure instead of receiving arbitrary weighted charges.
+- Required every enabled profile to use nonzero cooldown and bounded backoff, selected capped exponential growth as the preferred production direction, and retained fixed or linear strategies only for evidence-backed profiles.
+- Required explicit, bounded, externally sampled jitter for time-based production retries unless a documented deployment-specific exception proves synchronization cannot occur; policy remains deterministic and randomness-free.
+- Required a new explicit intent or sustained continuous frame delivery for an evidence-bound minimum duration to reset an episode. Owner construction, successful start, `Started`, source change, configuration change, and process restart alone do not reset failure pressure.
+- Classified device unavailability, source reconfiguration, resource exhaustion, and unsupported format as changed-evidence cases; interruption remains conditionally retryable; coarse construction/startup/internal failures and worker panic remain non-retryable.
+- Defined agent-internal operational observability and the representative failure, outage, retry-success, recurrence, resource-impact, and synchronization evidence required before numeric values can be approved.
+- Kept exact values, deterministic delay calculation, jitter sampling, configuration loading/reload, persistence, telemetry, clocks, timers, scheduling, reconnect, endpoint watching, owner replacement, and all recovery execution deferred. The runtime remains explicitly recovery-disabled.
+
 ## Later milestones
 
-- Select operational retry/backoff values from collected evidence, define deterministic delay calculation and jitter sampling, and design a configuration source/reload boundary in separately scoped milestones.
+- Collect representative operational evidence and select exact retry, cooldown, backoff, jitter, and stable-run values; define deterministic delay calculation and jitter sampling; and design a configuration source/reload boundary in separately scoped milestones.
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
