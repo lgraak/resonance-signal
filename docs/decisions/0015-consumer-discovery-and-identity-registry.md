@@ -264,18 +264,18 @@ This alternative is selected.
 - Conservative global snapshot revisioning can require rediscovery after an unrelated source changes.
 - Corruption, unsupported migration, host change, or reset deliberately invalidates stored selections.
 - A human may recognize a returning device that the provider must assign a new ID.
-- Durable identity requires private state, serialization, locking, migration, integrity checks, and fault testing in future implementation.
+- Durable private identity uses installation-bound state, atomic registry persistence, namespace/ID allocation, migration checks, and corruption handling; the storage implementation is now present in `resonance-agent`.
 - IDs remain installation- and host-scoped, not portable account or hardware identities.
 
 ### Implementation impact
 
-Future discovery work must add consumer snapshot and descriptor types, revision-aware selection preconditions, and current-state revalidation. `resonance-agent` must add the private registry boundary, transactional storage implementation, namespace and ID allocation, tombstones, migration, reset, and fake-backend/fault-injection seams. Platform adapters must provide validated native evidence separately from presentation metadata.
+`resonance-agent` now includes the private registry boundary and transactional storage implementation, including namespace and ID allocation, permanent tombstones, migration handling, reset, and fake-backend/fault-injection seams. Platform adapters must provide validated native evidence separately from presentation metadata. Consumer-facing snapshot and descriptor types, revision-aware selection preconditions, and current-state revalidation remain future discovery work.
 
-No current Rust source, dependency, storage, discovery, platform adapter, or runtime behavior changes as a result of this milestone.
+This milestone implements durable registry persistence and continuity fallback behavior; public API, storage schema, discovery enumeration, platform adapters, transport, and runtime behavior changes remain deferred.
 
 ## Deferred Decisions
 
-- actual registry storage engine, location, file format, integrity algorithm, locking, and platform durability primitives;
+- storage schema migration and transport encoding strategy;
 - discovery enumeration, filtering, paging, change notification, and Rust or transport representation;
 - Windows endpoint evidence mapping and resolved-source implementation;
 - PipeWire discovery, stable-property mapping, and Linux implementation;

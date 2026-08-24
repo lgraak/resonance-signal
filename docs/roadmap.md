@@ -212,7 +212,7 @@
 - Required conservative lifecycle handling: disappearance alone retains identity, proven return reuses the ID with a new stream, ambiguous return receives a new ID, and retired IDs are never reassigned.
 - Mapped Default Playback to attempt-time Windows role resolution and future PipeWire session-manager policy while keeping backend-native endpoint and node identifiers private.
 - Selected provider-managed opaque identity over backend-native IDs and display names.
-- Kept enumeration, Windows adapter changes, PipeWire implementation, persistence storage, UI, authorization, endpoint watching, and recovery execution deferred.
+- Kept enumeration, Windows adapter changes, PipeWire implementation, UI, authorization, endpoint watching, and recovery execution deferred.
 
 ## Milestone 6O: Consumer discovery API and identity registry design
 
@@ -222,7 +222,7 @@
 - Required whole-registry atomic commits and safe loss of continuity for missing or corrupted state, incompatible schemas, failed migration, host change, and explicit reset; discovery stays unavailable when a new namespace cannot be committed.
 - Defined conservative entry migration and retirement for backend or evidence-rule changes, with no identity preservation based on display names or similarity.
 - Defined a deterministic fake-backend and fault-injection validation seam for duplicate names, metadata changes, proven and ambiguous return, native-key reuse, stale snapshots, no substitution, and persistence failures.
-- Kept storage, enumeration, platform adapters, Rust API types, UI, InfoPanel integration, Linux implementation, and recovery behavior deferred.
+- Kept enumeration, platform adapters, Rust API types, UI, InfoPanel integration, Linux implementation, and recovery behavior deferred.
 
 ## Later milestones
 
@@ -230,7 +230,7 @@
 - Select exact retry, cooldown, backoff, jitter, and stable-run values only from accepted evidence; define deterministic delay calculation and jitter sampling; and design a configuration source/reload boundary in separately scoped milestones.
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
-- Implement the private registry storage and fake-backend validation seam, then add discovery enumeration and validate Windows resolved-source mapping before explicit-source capture.
+- Implemented private registry storage and fake-backend validation seam; next add discovery enumeration and validate Windows resolved-source mapping before explicit-source capture.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
 

@@ -1,6 +1,7 @@
 //! Platform capture orchestration for the Resonance Signal provider.
 
 pub mod capture;
+mod identity;
 
 pub(crate) mod recovery;
 pub(crate) mod recovery_config;
