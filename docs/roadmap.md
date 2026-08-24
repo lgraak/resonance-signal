@@ -205,13 +205,22 @@
 - Mapped the portable model to the Windows default-role/endpoint distinction and set constraints for a future PipeWire default-sink and stable-node-property mapping.
 - Kept discovery, UI, platform mapping details, identity persistence, Linux implementation, endpoint watching, retry timing, owner replacement, and all recovery execution deferred.
 
+## Milestone 6N: Source discovery and identity model
+
+- Defined discovery as a replaceable point-in-time snapshot of provider-managed opaque source IDs plus descriptive kind, label, availability, and default-role metadata.
+- Scoped `SourceId` to one provider installation on one host with one retained mapping namespace; IDs remain stable across refreshes, process restarts, metadata changes, and temporary absence only while backend continuity is proven.
+- Required conservative lifecycle handling: disappearance alone retains identity, proven return reuses the ID with a new stream, ambiguous return receives a new ID, and retired IDs are never reassigned.
+- Mapped Default Playback to attempt-time Windows role resolution and future PipeWire session-manager policy while keeping backend-native endpoint and node identifiers private.
+- Selected provider-managed opaque identity over backend-native IDs and display names.
+- Kept enumeration, Windows adapter changes, PipeWire implementation, persistence storage, UI, authorization, endpoint watching, and recovery execution deferred.
+
 ## Later milestones
 
 - Execute the accepted measurement plan, collect representative operational evidence, and review candidate failure classes without enabling recovery.
 - Select exact retry, cooldown, backoff, jitter, and stable-run values only from accepted evidence; define deterministic delay calculation and jitter sampling; and design a configuration source/reload boundary in separately scoped milestones.
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
-- Define source discovery and platform identity mapping before implementing explicit-source capture or durable source persistence.
+- Implement discovery enumeration and mapping persistence, then validate and implement Windows resolved-source mapping before explicit-source capture.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
 

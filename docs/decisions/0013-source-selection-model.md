@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-08-24
 - Evidence reviewed: 2026-08-24 Windows source availability, playback-device removal, Bluetooth availability, and source identity packets
+- Extended by: [ADR 0014](0014-source-discovery-and-identity-model.md)
 
 # Decision
 
@@ -84,7 +85,7 @@ The provider must never reuse a `SourceId` for a different source within the sam
 
 ### Persistence expectations
 
-Contract `0.1` does not promise that `SourceId` values are portable across hosts, provider installations, process restarts, operating-system reinstallations, backend database resets, or device re-enumeration. Consumers may compare and retain an ID only within the identity scope advertised by the provider. A durable cross-process persistence scope and invalidation mechanism require a separate decision after discovery and platform mapping are designed.
+[ADR 0014](0014-source-discovery-and-identity-model.md) defines the identity domain as one provider installation on one host with one retained mapping namespace. Within that domain, implemented discovery must preserve IDs across process restarts and temporary disappearance while native continuity remains proven. IDs are not portable across hosts, installations, mapping resets, operating-system reinstallations, or unproven backend re-enumeration. Mapping storage and runtime enforcement remain unimplemented.
 
 ## Lifecycle Semantics
 
@@ -177,7 +178,7 @@ This alternative is selected.
 
 ### Limitations
 
-- Source discovery and durable identity scope are not yet defined.
+- Source discovery representation and durable identity scope are defined by ADR 0014, but enumeration and mapping persistence are not implemented.
 - Current Windows runtime exposes only default-playback capture and does not execute replacement or follow-default recovery.
 - Current Windows runtime reports the logical `default-playback` value rather than a provider-mapped resolved endpoint `SourceId`; consumers cannot yet select or compare resolved endpoint identities through the API.
 - Exact equivalence between native identities across device removal, re-enumeration, process restart, or operating-system changes is platform-specific and unresolved.
@@ -191,10 +192,10 @@ No current Rust source, dependency, or runtime behavior changes as a result of t
 
 ## Deferred Decisions
 
-- source discovery, enumeration, friendly names, capabilities, and authorization;
+- source discovery enumeration, snapshot API, friendly-name presentation, capabilities, and authorization;
 - UI or consumer presentation for choosing and displaying sources;
 - exact Windows endpoint and PipeWire node-property mapping;
-- `SourceId` persistence scope, storage, invalidation, and migration;
+- `SourceId` mapping storage, invalidation implementation, migration, and reset behavior;
 - Linux PipeWire implementation and validation;
 - recovery behavior, endpoint watching, wait/retry timing, owner replacement, and default-follow execution;
 - microphone-default intent and whether it needs policy distinct from playback;
