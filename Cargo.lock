@@ -9,6 +9,9 @@ version = "0.1.0"
 [[package]]
 name = "resonance-api"
 version = "0.1.0"
+dependencies = [
+ "resonance-core",
+]
 
 [[package]]
 name = "resonance-core"

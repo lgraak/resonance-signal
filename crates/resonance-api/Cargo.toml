@@ -7,3 +7,4 @@ repository.workspace = true
 description = "Client-facing contracts for Resonance Signal"
 
 [dependencies]
+resonance-core = { path = "../resonance-core" }

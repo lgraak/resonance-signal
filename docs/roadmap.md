@@ -9,16 +9,23 @@
 
 ## Milestone 2: Core contracts
 
-- Define the provider-independent audio signal data model.
-- Define the first client-facing contract.
-- Establish compatibility and versioning expectations.
-- Add focused tests for the published types and contracts.
+- Defined the provider-independent waveform, level, and spectrum data model.
+- Defined the first multi-source, multi-product client contract.
+- Established pre-1.0 compatibility and versioning expectations.
+- Added focused validation and contract tests.
+
+## Milestone 3A: Practical signal processing primitives
+
+- Added borrowed, frame-aligned waveform windows without copying sample data.
+- Added scalar and per-channel RMS and maximum absolute peak calculations.
+- Added explicit peak-normalization helpers that preserve out-of-range headroom.
+- Added synthetic tests for silence, constant and known waveforms, multiple channels, subwindows, invalid input, and normalization.
 
 ## Later milestones
 
 - Evaluate platform capture requirements and libraries.
 - Implement capture providers behind platform-neutral boundaries.
-- Implement signal-processing behavior.
+- Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
 
 Consumer applications and visualization remain outside this roadmap and repository.

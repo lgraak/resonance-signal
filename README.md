@@ -6,7 +6,7 @@ The provider is the product. Consumers are clients, and visualization is outside
 
 ## Status
 
-The project is in its foundation milestone. The Rust workspace, crate boundaries, documentation structure, and cross-platform CI are established. Audio capture, signal-processing behavior, client contracts, and service transports are not implemented yet.
+The foundation, audio-data-contract, and basic signal-processing milestones are complete. The workspace defines provider-independent waveform and derived signal frames, a transport-neutral multi-source contract, zero-copy waveform subwindows, RMS and peak levels, and explicit peak normalization. Audio capture, FFT processing, device discovery, serialization, and service transports are not implemented yet.
 
 ## Architecture direction
 
