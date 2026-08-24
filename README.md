@@ -6,7 +6,7 @@ The provider is the product. Consumers are clients, and visualization is outside
 
 ## Status
 
-The foundation, audio-data-contract, basic signal-processing, bounded-window-scheduling, stereo-first capture-requirements, and capture-backend-selection milestones are complete. The workspace defines provider-independent waveform and derived signal frames, a transport-neutral multi-source contract, bounded analysis cadence with explicit discontinuity handling, zero-copy waveform subwindows, RMS and peak levels, explicit peak normalization, and the requirements future platform capture backends must satisfy. The selected initial directions are `wasapi-rs` on Windows and official PipeWire Rust bindings on Linux, kept behind `resonance-agent`; no capture dependency or implementation has been added. Audio capture, FFT processing, device discovery, serialization, and service transports are not implemented yet.
+The foundation, audio-data-contract, basic signal-processing, bounded-window-scheduling, stereo-first capture-requirements, capture-backend-selection, and Windows playback-loopback prototype milestones are complete. The workspace defines provider-independent waveform and derived signal frames, a transport-neutral multi-source contract, bounded analysis cadence with explicit discontinuity handling, zero-copy waveform subwindows, RMS and peak levels, explicit peak normalization, and a Windows-only evidence-gathering adapter in `resonance-agent`. The prototype uses `wasapi` 0.24.0 to turn the default Windows playback endpoint into bounded, validated `AudioFrame` and `StreamEvent` output. Production capture orchestration, microphone and Linux capture, FFT processing, device discovery, serialization, and service transports are not implemented yet.
 
 Supported capture products are mono and two-channel stereo. Surround, spatial, and object-based audio are outside the product scope. A future capture backend may accept a multichannel source only when the platform can provide a valid mono or stereo representation; it must never silently keep the first two channels or invent a downmix.
 
@@ -35,7 +35,7 @@ The workspace is divided into three crates:
 
 - `resonance-core`: core data structures, shared types, and provider-independent logic.
 - `resonance-api`: consumer-facing semantic contracts without a selected transport or serialization format.
-- `resonance-agent`: executable entry point, future platform capture adapters, and capture orchestration.
+- `resonance-agent`: executable entry point, the Windows playback-loopback prototype, and future platform capture orchestration.
 
 See [Architecture](docs/architecture.md), [API](docs/api.md), and [Roadmap](docs/roadmap.md) for the current project boundaries.
 

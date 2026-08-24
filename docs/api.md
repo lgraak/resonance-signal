@@ -89,7 +89,7 @@ Selected playback devices, microphones, and virtual devices are all addressed by
 
 ## Capture-provider boundary
 
-Platform capture belongs behind orchestration in `resonance-agent`, not in `resonance-core` or `resonance-api`. The selected initial approaches are `wasapi-rs` on Windows and official PipeWire Rust bindings on Linux; neither dependency is part of this API. A backend boundary needs only to resolve a selected source, negotiate and validate its format, start and stop capture, and deliver bounded waveform batches or explicit lifecycle failures. A backend-specific generic framework or async runtime is not part of this contract.
+Platform capture belongs behind orchestration in `resonance-agent`, not in `resonance-core` or `resonance-api`. The Windows evidence prototype uses `wasapi` 0.24.0; the selected future Linux approach is the official PipeWire Rust binding. Neither dependency is part of this API. A backend boundary resolves a selected source, negotiates and validates its format, starts and stops capture, and delivers bounded waveform batches or explicit lifecycle failures. A backend-specific generic framework or async runtime is not part of this contract.
 
 Before a stream starts, capture orchestration must:
 
@@ -140,6 +140,24 @@ The following remain experimental in 0.1:
 - transport, framing, delivery, backpressure, and authentication;
 - wall-clock correlation between streams or hosts.
 
-Backend selection is recorded in [ADR 0004](decisions/0004-capture-backend-selection.md). The choice does not change the consumer contract: platform types and dependencies remain private to `resonance-agent`, and capture implementation is still deferred. The next milestone is one bounded Windows playback-loopback adapter prototype with fake-adapter failure-path tests; microphone and Linux implementation do not proceed simultaneously.
+Backend selection is recorded in [ADR 0004](decisions/0004-capture-backend-selection.md). The choice does not change the consumer contract: platform types and dependencies remain private to `resonance-agent`.
+
+## Windows playback-loopback prototype
+
+Milestone 5A implements one evidence-gathering source: the console-role default Windows rendering endpoint captured in WASAPI shared loopback mode. It requests finite interleaved 32-bit float PCM at the endpoint mix sample rate. A native mono mix remains mono. Every other non-zero native channel count is explicitly offered to the Windows audio engine as front-left/front-right stereo with automatic conversion; initialization fails as unsupported rather than selecting channels or performing a project-owned downmix. The active output descriptor never contains more than two channels.
+
+The event-driven WASAPI owner thread copies packets into a four-buffer preallocated pool. A non-blocking synchronous channel with the same capacity hands packets to the ordinary processing thread, where bytes are decoded, finite values are checked, and `AudioFrame` values are constructed. Buffer-pool or handoff exhaustion ends the stream with `ErrorKind::ResourceExhausted`; no packet is silently dropped and the capture thread does not block behind processing.
+
+WASAPI `BufferInfo.index` proves native packet continuity. The first accepted native device position is normalized to provider frame index zero, and later positions must exactly match the prior packet end. `BufferInfo.timestamp` is the first-frame QPC timestamp in 100-nanosecond units; timestamp-error flags and backward QPC movement end the stream, and QPC deltas are included in prototype evidence. `AudioFrame.stream_time_ns` is calculated from the normalized contiguous source-frame index and negotiated sample rate. This preserves a sample-clock timeline compatible with the existing scheduler instead of exposing absolute QPC values or callback scheduling jitter. The conversion rounds down only when an integer number of source frames cannot be expressed as whole nanoseconds.
+
+A data-discontinuity flag on the first accepted packet describes history before the new stream and is recorded as evidence. A later discontinuity flag, device-position gap, invalid timestamp, non-finite sample, packet-shape error, observable format change, audio-session disconnection, endpoint removal or disablement, or console default-device replacement ends the uninterrupted stream. A later capture invocation creates a new `StreamId`, frame index zero, and timestamp zero. Automatic reconnect and continuous default-device following are production decisions deferred beyond this prototype.
+
+On Windows, a ten-second evidence run is:
+
+```text
+cargo run -p resonance-agent -- --duration-seconds 10
+```
+
+The executable prints lifecycle events and a final measurement summary while data events flow through the same callback without dumping sample buffers: native and accepted format, buffer and packet frame sizes, packet and source-frame counts, callback intervals, packet-read duration, QPC deltas, initial-discontinuity observation, and terminal lifecycle reason. End-to-end latency is reported as unmeasured because this prototype does not correlate the QPC clock to the consumer observation clock. Real-device results are observational and are not part of the hardware-independent test suite.
 
 Adding a transport requires a separate decision record. It must version its serialized schema independently and preserve the semantic contract above rather than treating Rust memory layout as a wire format.

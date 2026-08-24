@@ -7,3 +7,7 @@ repository.workspace = true
 description = "Executable entry point for Resonance Signal"
 
 [dependencies]
+resonance-api = { path = "../resonance-api" }
+
+[target.'cfg(windows)'.dependencies]
+wasapi = "=0.24.0"

@@ -43,10 +43,20 @@
 - Rejected a third-party cross-platform capture layer for the first implementation because required native timestamp-validity, source-position, and provenance evidence would be lost.
 - Defined one bounded Windows playback-loopback prototype as the next implementation milestone without adding dependencies or capture code.
 
+## Milestone 5A: Windows WASAPI playback-loopback prototype
+
+- Added the Windows-only `wasapi` 0.24.0 dependency to `resonance-agent`; `resonance-core` and `resonance-api` remain platform-independent.
+- Opened the console-role default playback endpoint in event-driven shared loopback mode and requested mono or explicit front-left/front-right interleaved float output at the endpoint mix sample rate.
+- Added a preallocated four-buffer pool and matching bounded, non-blocking handoff from the COM-owned WASAPI thread to ordinary processing.
+- Converted native packets into validated `AudioFrame` and existing `StreamEvent` output with contiguous normalized frame indexes and sample-derived stream timestamps.
+- Retained and validated WASAPI device positions, QPC timestamps, discontinuity/silence/timestamp flags, endpoint identity, endpoint/default-device notifications, and session-disconnect reasons.
+- Made interruption, format change, device invalidation, timing discontinuity, and handoff exhaustion explicit stream boundaries; automatic reconnect remains deferred.
+- Added hardware-independent conversion, frame-generation, unsupported-format, non-finite-value, and discontinuity tests plus runtime evidence reporting.
+
 ## Later milestones
 
-- Implement and validate one bounded Windows playback-loopback adapter behind the existing platform-neutral boundary.
-- Add microphone capture and the Linux PipeWire adapter only after the first prototype evidence is reviewed.
+- Review real-device Windows prototype evidence and define the production capture lifecycle, reconnection, buffer sizing, and diagnostic policy.
+- Add microphone capture and the Linux PipeWire adapter only after that evidence is reviewed.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
 
