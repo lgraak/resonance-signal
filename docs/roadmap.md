@@ -81,9 +81,20 @@
 - Validated that path on Windows 11 against Headphones (WH-1000XM5): 96 kHz stereo capture emitted 1,000 data frames over ten seconds, then joined with `ProviderShutdown` / `StopRequested`; observed WASAPI QPC deltas remained approximately 10 ms.
 - Kept automatic reconnect, retry/backoff, and default-device following deferred to a separate milestone.
 
+## Milestone 6B: Capture supervisor and recovery boundary design
+
+- Selected a future `CaptureSupervisor` in `resonance-agent` as the owner of recovery policy above the existing single-use `CaptureOwner`.
+- Kept one-run resource ownership, callbacks, joined cleanup, and terminal event emission in `CaptureOwner`; it does not restart, follow devices, or apply retry policy.
+- Assigned owner creation, restart decisions, retry-policy application, backoff state, endpoint-replacement acceptance, default-device-following policy, and recovery state to the supervisor.
+- Required the prior owner to complete and release its resources before a replacement is created, with explicit stop suppressing any further recovery.
+- Preserved every terminal lifecycle boundary: each replacement owner creates a new `StreamId`, resets frame index and stream time to zero, and emits a separate `Started` event.
+- Kept machine-actionable errors, retry hints, end reasons, and completion separate from human messages, logs, and evidence output.
+- Defined future handling responsibilities for default-endpoint removal or replacement, device disablement, format change, and temporary interruption without implementing reconnect or device watching.
+- Deferred retry timing, backoff algorithm, default-device-following policy, service lifetime, and transport behavior.
+
 ## Later milestones
 
-- Define and validate reconnect ownership, retry/backoff, and controlled endpoint-replacement acceptance around the completed single-run owner without selecting transport prematurely.
+- Implement and validate the supervisor state boundary without adding reconnect, then add separately approved retry/backoff and controlled endpoint-replacement behavior.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.

@@ -101,7 +101,7 @@ WASAPI device position validates packet adjacency. QPC timestamp validity and mo
 
 Endpoint and session callbacks perform only an atomic first-reason update. Default playback replacement, format change, endpoint invalidation, device removal, session disconnect, later packet discontinuity, or timing failure stops the current WASAPI stream and emits an explicit provider error/end event. A normal owner stop is requested through a cloneable `CaptureStopToken` and maps to `ProviderShutdown`. Duration belongs only to the diagnostic runner and maps to `ConsumerCancelled`.
 
-The adapter does not reconnect or continuously follow the default device. Invoking a later capture run is the explicit restart operation and establishes a new stream identity, frame index zero, and timestamp zero. This keeps reconnection policy with the future owner and prevents retry loops from being hidden inside platform capture.
+The adapter does not reconnect or continuously follow the default device. Invoking a later capture run is the explicit restart operation and establishes a new stream identity, frame index zero, and timestamp zero. This keeps reconnection policy with the future supervisor and prevents retry loops from being hidden inside platform capture.
 
 ### Capture owner lifecycle
 
@@ -135,7 +135,31 @@ stopped-before-start  running, ownership retained
 
 A stop request is an atomic, idempotent signal. A pre-start stop prevents initialization. During a run, the WASAPI event loop observes stop at least once per 100 ms wait interval, stops the audio client, emits the existing terminal event, releases its thread-affine resources, and exits. The ordinary owner worker finishes callbacks, joins the WASAPI thread, and reports completion. `shutdown` bounds only the caller's wait: a timeout never detaches the worker or moves the callback out of the owner, and the caller can wait again. Successful shutdown returns only after the worker is joined, so no event callback or capture resource remains live. Callbacks must return promptly; a callback that blocks can cause bounded shutdown to time out. Drop provides a final request-and-join cleanup path.
 
-The owner does not contain retry, backoff, default-device following, or endpoint replacement policy. It cannot be restarted. A future recovery layer may decide to create a new owner, but each such run must preserve the existing new-`StreamId`, frame-index-zero, and stream-time-zero rules and expose every terminal lifecycle transition.
+The owner does not contain retry, backoff, default-device following, or endpoint replacement policy. It cannot be restarted.
+
+### Capture supervisor boundary
+
+Recovery policy belongs to a future `CaptureSupervisor` in `resonance-agent`, above the single-use owner:
+
+```text
+CaptureSupervisor
+    |-- owns desired running/stopped state
+    |-- owns the current CaptureOwner
+    |-- observes typed events and completion
+    |-- decides stop, wait/backoff, or replacement
+    |
+    v
+CaptureOwner
+    |
+    v
+WASAPI thread
+```
+
+The supervisor creates and owns at most one active owner for a supervised capture intent. It may evaluate recovery only after the prior owner has delivered its terminal lifecycle, completed, and released all nested resources. It owns retry-policy application, backoff and attempt state, endpoint-replacement acceptance, default-device-following policy, and suppression of recovery after explicit shutdown. It does not own COM or native capture resources, and retry hints remain policy inputs rather than commands.
+
+Every owner event remains visible to consumers. A replacement owner emits a new `Started` event with a new `StreamId`, frame index zero, and stream time zero; the supervisor cannot conceal the prior `Error`/`Ended` transition or synthesize continuity. Human messages and logs are diagnostic evidence only. Recovery decisions use typed error categories, retry hints, end reasons, completion, desired state, and future configured policy.
+
+The supervisor boundary is accepted design, not implemented behavior. Retry timing, backoff, default-device following, source-availability detection, service lifetime, and transport exposure remain deferred. See [ADR 0007](decisions/0007-capture-supervisor-boundary.md).
 
 ## Contract flow
 
@@ -178,7 +202,7 @@ Future products remain separate branches from the waveform input. A later `Spect
 
 ## Current constraints
 
-- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner in `resonance-agent`; no reconnecting service or service installation exists.
+- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner in `resonance-agent`; the supervisor boundary above it is designed but no supervisor, reconnecting service, or service installation exists.
 - Windows microphone capture and all Linux capture remain unimplemented.
 - Supported future capture output is limited to mono and two-channel stereo; wider, spatial, and object-based formats are rejected unless the platform supplies a valid mono/stereo representation.
 - Custom downmixing and silent first-two-channel extraction are prohibited.
