@@ -214,13 +214,23 @@
 - Selected provider-managed opaque identity over backend-native IDs and display names.
 - Kept enumeration, Windows adapter changes, PipeWire implementation, persistence storage, UI, authorization, endpoint watching, and recovery execution deferred.
 
+## Milestone 6O: Consumer discovery API and identity registry design
+
+- Defined a replaceable `DiscoverySnapshot` with an opaque revision and `SourceDescriptor` values containing ID, presentation name, kind, three-state availability, supported signal products, and current default roles.
+- Required revision preconditions for operations made directly from a snapshot, while durable Explicit Source intent remains ID-based and is revalidated against current registry state.
+- Assigned one private installation-and-host-bound identity registry, backend evidence, live/absent mappings, and permanent retired-ID tombstones to `resonance-agent`.
+- Required whole-registry atomic commits and safe loss of continuity for missing or corrupted state, incompatible schemas, failed migration, host change, and explicit reset; discovery stays unavailable when a new namespace cannot be committed.
+- Defined conservative entry migration and retirement for backend or evidence-rule changes, with no identity preservation based on display names or similarity.
+- Defined a deterministic fake-backend and fault-injection validation seam for duplicate names, metadata changes, proven and ambiguous return, native-key reuse, stale snapshots, no substitution, and persistence failures.
+- Kept storage, enumeration, platform adapters, Rust API types, UI, InfoPanel integration, Linux implementation, and recovery behavior deferred.
+
 ## Later milestones
 
 - Execute the accepted measurement plan, collect representative operational evidence, and review candidate failure classes without enabling recovery.
 - Select exact retry, cooldown, backoff, jitter, and stable-run values only from accepted evidence; define deterministic delay calculation and jitter sampling; and design a configuration source/reload boundary in separately scoped milestones.
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
-- Implement discovery enumeration and mapping persistence, then validate and implement Windows resolved-source mapping before explicit-source capture.
+- Implement the private registry storage and fake-backend validation seam, then add discovery enumeration and validate Windows resolved-source mapping before explicit-source capture.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
 
