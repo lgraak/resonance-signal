@@ -3,8 +3,8 @@
 //! This module records facts and validates transitions only. It has no owner
 //! factory, clock, timer, thread, device, event sink, or recovery action.
 
-// Milestone 6G adds the state component before separately approved supervisor
-// integration and recovery execution.
+// Recovery execution remains separately gated. This module only records facts
+// supplied by CaptureSupervisor and validates state transitions.
 #![allow(dead_code)]
 
 use std::collections::VecDeque;
@@ -63,6 +63,7 @@ pub(crate) enum AttemptLifecycle {
     OwnerCreated,
     Running,
     Failed,
+    Completed,
     CleanupComplete,
 }
 
@@ -90,6 +91,7 @@ pub(crate) enum RetryPhase {
 /// inserted into retry history or increment failure counters.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RetryFailureCause {
+    OwnerConstructionFailure,
     DeviceUnavailable(DeviceUnavailableCause),
     SourceReconfigured(SourceReconfigurationCause),
     Interrupted,
@@ -103,6 +105,7 @@ pub(crate) enum RetryFailureCause {
 impl From<RetryFailureCause> for RecoveryCause {
     fn from(cause: RetryFailureCause) -> Self {
         match cause {
+            RetryFailureCause::OwnerConstructionFailure => Self::StartupFailure,
             RetryFailureCause::DeviceUnavailable(cause) => Self::DeviceUnavailable(cause),
             RetryFailureCause::SourceReconfigured(cause) => Self::SourceReconfigured(cause),
             RetryFailureCause::Interrupted => Self::Interrupted,
@@ -212,6 +215,7 @@ pub(crate) struct FailureRecord {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct FailureTotals {
     pub(crate) total: u64,
+    pub(crate) owner_construction_failure: u64,
     pub(crate) device_unavailable: u64,
     pub(crate) source_reconfigured: u64,
     pub(crate) interrupted: u64,
@@ -230,6 +234,7 @@ impl FailureTotals {
             .checked_add(1)
             .ok_or(RetryTransitionError::CounterExhausted)?;
         let counter = match cause {
+            RetryFailureCause::OwnerConstructionFailure => &mut updated.owner_construction_failure,
             RetryFailureCause::DeviceUnavailable(_) => &mut updated.device_unavailable,
             RetryFailureCause::SourceReconfigured(_) => &mut updated.source_reconfigured,
             RetryFailureCause::Interrupted => &mut updated.interrupted,
@@ -560,7 +565,31 @@ impl<const HISTORY_CAPACITY: usize> RetryState<HISTORY_CAPACITY> {
         }
         attempt.lifecycle = AttemptLifecycle::Running;
         attempt.stream_started = true;
-        self.phase = RetryPhase::Running;
+        if self.desired_running {
+            self.phase = RetryPhase::Running;
+        }
+        self.state_revision = next_revision;
+        Ok(())
+    }
+
+    /// Records a non-failure owner outcome against the current attempt.
+    pub(crate) fn record_normal_completion(
+        &mut self,
+        attempt_id: AttemptId,
+    ) -> Result<(), RetryTransitionError> {
+        let next_revision = self.next_revision()?;
+        let attempt = self.require_attempt_mut(attempt_id)?;
+        if attempt.failure.is_some()
+            || !matches!(
+                attempt.lifecycle,
+                AttemptLifecycle::OwnerCreated | AttemptLifecycle::Running
+            )
+        {
+            return Err(RetryTransitionError::InvalidAttemptLifecycle(
+                attempt.lifecycle,
+            ));
+        }
+        attempt.lifecycle = AttemptLifecycle::Completed;
         self.state_revision = next_revision;
         Ok(())
     }
@@ -642,7 +671,12 @@ impl<const HISTORY_CAPACITY: usize> RetryState<HISTORY_CAPACITY> {
     ) -> Result<(), RetryTransitionError> {
         let next_revision = self.next_revision()?;
         let attempt = self.require_attempt_mut(attempt_id)?;
-        if !attempt.stream_started || attempt.failure.is_none() {
+        if !attempt.stream_started
+            || !matches!(
+                attempt.lifecycle,
+                AttemptLifecycle::Running | AttemptLifecycle::Failed | AttemptLifecycle::Completed
+            )
+        {
             return Err(RetryTransitionError::TerminalEventNotApplicable);
         }
         attempt.terminal_event_delivered = true;
@@ -661,8 +695,9 @@ impl<const HISTORY_CAPACITY: usize> RetryState<HISTORY_CAPACITY> {
         let desired_running = self.desired_running;
         let attempt = self.require_attempt_mut(attempt_id)?;
         attempt.resources_released = true;
-        if attempt.failure.is_some()
-            && (!attempt.stream_started || attempt.terminal_event_delivered)
+        if attempt.lifecycle == AttemptLifecycle::Completed
+            || (attempt.failure.is_some()
+                && (!attempt.stream_started || attempt.terminal_event_delivered))
         {
             attempt.lifecycle = AttemptLifecycle::CleanupComplete;
         } else if !desired_running {
@@ -831,6 +866,18 @@ impl<const HISTORY_CAPACITY: usize> RetryState<HISTORY_CAPACITY> {
             consecutive_failed_attempts: self.consecutive_failed_attempts,
             cooldown: self.cooldown,
         })
+    }
+
+    pub(crate) fn is_current_snapshot(&self, evaluated: &RetrySnapshot) -> bool {
+        self.require_current_snapshot(evaluated).is_ok()
+    }
+
+    pub(crate) const fn intent_generation(&self) -> Option<IntentGeneration> {
+        self.intent_generation
+    }
+
+    pub(crate) const fn desired_running(&self) -> bool {
+        self.desired_running
     }
 
     fn refresh_post_failure_phase(&mut self) {

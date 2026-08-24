@@ -142,10 +142,21 @@
 - Added transition-table tests for intent invalidation, once-only attempt accounting, episode reset and exhaustion, bounded history, cooldown gating, immutable policy evaluation, and terminal/cleanup ordering.
 - Kept the state model disconnected from the runtime `CaptureSupervisor`; it has no capture factory, device knowledge, timer, thread, event sink, reconnect, or replacement behavior.
 
+## Milestone 6H: Supervisor retry-state integration
+
+- Made runtime `CaptureSupervisor` the owner and sole mutator of its intent generation, attempt identity, bounded `RetryState`, recovery episode state, and state revision.
+- Committed one attempt immediately before the owner-factory call, made construction explicitly fallible, and recorded construction failure, owner creation, startup failure, actual `Started`, terminal failure, normal completion, terminal delivery, and joined cleanup against that same identity.
+- Preserved attempt and recovery accounting across the complete owner lifecycle; no lifecycle event increments the attempt twice and `Started` does not reset recovery state.
+- Added an owned immutable recovery-evaluation snapshot containing current intent/generation/revision, configuration identity, retry state, attempt identity, lifecycle evidence, retry guidance, and applicable policy inputs. Snapshot creation is side-effect free and later state mutations are detectably stale.
+- Invoked the pure `RecoveryPolicy` only after terminal and cleanup facts are recorded and retained the snapshot plus decision as advisory supervisor state.
+- Proved with hardware-independent injected-owner tests that a permit decision creates no owner, explicit stop invalidates prior evaluation, late events cannot restore running intent, and factory creation remains exactly once.
+- Kept retry counters, recovery state, decisions, snapshots, and cooldown private to `resonance-agent`; `resonance-core` and `resonance-api` remain unchanged.
+- Kept all recovery execution disabled: no recovery authorization is consumed, no automatic attempt is committed, and no retry loop, timer, sleep, backoff execution, watcher, reconnect, default-device following, or replacement owner exists.
+
 ## Later milestones
 
-- Define agent-internal retry configuration and integrate state accounting into `CaptureSupervisor` without enabling timers, endpoint watchers, reconnect, or replacement capture unless separately approved.
-- Select and validate concrete retry/backoff values only from operational evidence in a separately scoped milestone.
+- Define operational retry configuration and select concrete retry/backoff values only from collected evidence in a separately scoped milestone.
+- Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.

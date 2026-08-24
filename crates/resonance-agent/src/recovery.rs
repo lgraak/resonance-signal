@@ -3,9 +3,8 @@
 //! This module represents policy authorization only. It does not create or
 //! control capture owners, wait for time or hardware, or mutate retry state.
 
-// Milestone 6E deliberately represents policy without wiring it into runtime
-// orchestration. The types become live when separately approved enforcement is
-// added to CaptureSupervisor.
+// CaptureSupervisor evaluates this policy and records the result, but recovery
+// execution remains separately gated and disabled.
 #![allow(dead_code)]
 
 use resonance_api::contract::RetryHint;
