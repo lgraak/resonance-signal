@@ -28,9 +28,17 @@
 - Added explicit frame-index, timestamp, format, and uninterrupted-stream boundary handling.
 - Added synthetic tests for completion, accumulation, multiple outputs, oversized input, discontinuities, stream changes, and empty input.
 
+## Milestone 4A: Stereo-first capture requirements and provider boundary
+
+- Limited supported capture products to mono and two-channel stereo while preserving the wider provider-independent core layout model.
+- Established front-left/front-right ordering for known stereo and conservative discrete layouts when one- or two-channel positions are unknown.
+- Placed format enforcement at the future capture boundary in `resonance-agent`; unsupported wider sources fail before an active stream starts.
+- Prohibited silent first-two-channel extraction and custom downmixing without a separate evidence-backed decision.
+- Defined format, batch, timing, identity, lifecycle, diagnostic, and backend-evaluation requirements without selecting a dependency or implementing capture.
+
 ## Later milestones
 
-- Evaluate platform capture requirements and libraries.
+- Evaluate candidate capture backends against the Milestone 4A criteria using authoritative Windows and Linux evidence; recommend one bounded prototype without adding it to production.
 - Implement capture providers behind platform-neutral boundaries.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.

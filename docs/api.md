@@ -17,6 +17,14 @@ The current audio contract version is `0.1` (`AUDIO_CONTRACT_VERSION`). It is su
 - A frame contains one or more complete sample frames. The provider may vary batch sizes; consumers must not assume a fixed batch duration.
 - Positioned layouts preserve explicit channel order. A discrete layout preserves channel count and order when semantic positions are unknown.
 
+Product capture support is narrower than the general signal type:
+
+- Mono is one ordered channel. It is reported as positioned `Mono` when that meaning is known, or as discrete one-channel audio when the backend cannot establish a portable semantic position.
+- Stereo is two ordered channels. A known stereo pair is reported as `FrontLeft`, then `FrontRight`; the interleaved sample order follows that layout. An unknown two-channel source may be accepted as a discrete two-channel layout, preserving channel zero/channel one order without inventing left/right positions.
+- An explicitly positioned two-channel layout that is not a left/right stereo pair is not re-labelled as stereo. It requires a valid platform-provided mono/stereo representation or is unsupported.
+
+`StreamDescriptor` reports the actual accepted layout at stream start, and every signal frame retains it. Consumers must inspect that value instead of assuming that every two-channel stream has known speaker positions. The core `ChannelLayout` remains capable of representing wider layouts for compatibility and provider-independent signal work; that generality does not make wider capture formats supported products.
+
 `FrameTimestamp` has two stream-relative values:
 
 - `frame_index` is the zero-based sample-frame position in one uninterrupted stream and is authoritative for detecting continuity.
@@ -79,6 +87,26 @@ Sources are selected as either:
 
 Selected playback devices, microphones, and virtual devices are all addressed by opaque ID. `SourceKind` describes the resolved source as playback, microphone, virtual, or other. The contract makes no claim that IDs are portable across hosts or stable after device removal. Device discovery, friendly names, capabilities, and persistence rules are later API work.
 
+## Capture-provider boundary
+
+Platform capture belongs behind orchestration in `resonance-agent`, not in `resonance-core` or `resonance-api`. A future backend boundary needs only to resolve a selected source, negotiate and validate its format, start and stop capture, and deliver bounded waveform batches or explicit lifecycle failures. A backend-specific generic framework or async runtime is not part of this contract.
+
+Before a stream starts, capture orchestration must:
+
+1. request a valid mono or stereo representation from the platform when one is available;
+2. reject a selected format with more than two channels, or an incompatible explicitly positioned two-channel layout, unless the platform itself supplies a valid mono/stereo conversion;
+3. normalize accepted native integer or floating-point samples into finite, interleaved `f32` samples while preserving ordering;
+4. create opaque source and uninterrupted-stream identities; and
+5. publish a `StreamDescriptor` containing the actual sample rate and accepted channel layout.
+
+The descriptor and all frames in one stream have fixed sample rate and layout. Capture callback or polling boundaries become variable-sized, complete, bounded `AudioFrame` batches; they do not define analysis windows or stream boundaries. The first batch starts with source frame index zero. Later batches use contiguous source frame indices and stream-relative monotonic timestamps. Platform timing evidence must be converted conservatively into those existing semantics rather than being described as wall-clock time.
+
+An interruption, restart, device reconfiguration, timing discontinuity, or format change ends the current stream. Resumption gets a new `StreamId`, frame index zero, and a new monotonic timeline. The orchestration layer passes accepted frames and their stream identity to `WindowScheduler`; the scheduler remains capture-backend independent.
+
+If the platform cannot supply a valid mono or stereo representation of a wider source, orchestration reports `ErrorKind::UnsupportedFormat` for that source with an appropriate change-format or do-not-retry hint and does not start the stream. Diagnostics should retain the requested source, native/source format, requested mono/stereo constraints, selected or proposed platform format, whether platform conversion was attempted, and the backend's stable error code and message when available. The current contract may carry human-readable diagnostic context in `ProviderError::message`; a structured backend-diagnostics extension is deferred.
+
+Blindly selecting the first two channels is invalid because channel order in a wider layout need not place the complete stereo program first and may omit content such as center-channel dialogue. Resonance Signal does not reorder, discard, duplicate, synthesize, or mix channels to force acceptance. A custom downmix requires a separate evidence-backed decision defining input layouts, matrices, normalization/headroom, LFE treatment, metadata handling, testing, and consumer-visible provenance.
+
 One request may resolve to several `StreamDescriptor` values. Each descriptor identifies one uninterrupted source stream and fixes its source, sample rate, and channel layout. `StreamEvent` then carries lifecycle events, `SignalPacket` data, errors, and an explicit end reason. A format change is a stream boundary, not an in-place mutation.
 
 ## Failure model
@@ -111,5 +139,7 @@ The following remain experimental in 0.1:
 - serialization field names and numeric encoding;
 - transport, framing, delivery, backpressure, and authentication;
 - wall-clock correlation between streams or hosts.
+
+Backend selection is also deferred. Candidates must later be evaluated for maintained Rust support; Windows 11 playback-loopback and microphone capture; Linux PipeWire-compatible playback and microphone capture; valid mono/stereo negotiation; sample-rate, timestamp, and discontinuity visibility; bounded callback or polling behavior; observable platform errors; GPL-3.0-only license compatibility; and test seams that do not require audio hardware in core tests. No current documentation claims that WASAPI, PipeWire, or a particular Rust library satisfies those criteria.
 
 Adding a transport requires a separate decision record. It must version its serialized schema independently and preserve the semantic contract above rather than treating Rust memory layout as a wire format.

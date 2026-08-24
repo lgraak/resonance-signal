@@ -31,7 +31,7 @@ Owns the consumer-facing semantic contract: source selection, subscriptions, str
 
 ### `resonance-agent`
 
-Provides the executable entry point. It will orchestrate capture and provider lifecycle work in later milestones.
+Provides the executable entry point. It owns future platform-capture adapters, capture-format enforcement, and provider lifecycle orchestration. No capture adapter is implemented or selected yet.
 
 Dependency direction is one way:
 
@@ -42,6 +42,33 @@ resonance-agent  --->  resonance-api  --->  resonance-core
 ```
 
 `resonance-core` cannot depend on capture backends, transports, or consumers. `resonance-api` cannot depend on an operating-system capture implementation. Consumer concerns never flow back into these crates.
+
+## Stereo-first capture boundary
+
+Resonance Signal supports capture products with one or two channels. Mono is one ordered channel. Known stereo is ordered front-left then front-right; an unknown two-channel layout may remain discrete without guessed speaker positions. Surround layouts, spatial/object metadata, and explicitly positioned non-stereo pairs are not supported capture products.
+
+The enforcement point is the capture boundary owned by `resonance-agent`. Keeping the restriction there preserves the provider-independent `ChannelLayout` type and avoids a breaking core/API contraction while ensuring unsupported platform formats never enter an active product stream.
+
+```text
+platform source
+      |
+      v
+backend negotiation and mono/stereo validation  -- unsupported --> ProviderError
+      |
+      v
+bounded interleaved f32 AudioFrame batches
+      |
+      v
+WindowScheduler --> signal processing --> resonance-api events --> consumers
+```
+
+A future backend may use a native platform format internally, but its accepted output must have an actual non-zero sample rate, one accepted channel layout, finite interleaved `f32` samples, contiguous source frame indices, and stream-relative monotonic timestamps. Capture batch sizes may vary and must remain bounded. The fixed format, source ID, and uninterrupted-stream ID are established before publishing `StreamEvent::Started`.
+
+Platform-provided conversion is acceptable only when it yields a valid mono or stereo representation whose ordering can be reported truthfully. A source with more than two channels is otherwise rejected as `UnsupportedFormat`. Selecting the first two channels, relabelling known non-left/right positions, or performing a custom downmix is forbidden. Unknown one- and two-channel layouts may remain discrete because that preserves order without inventing semantics.
+
+Interruption, restart, reconfiguration, timestamp discontinuity, or format change ends the stream. A resumed source receives a new stream ID, frame index zero, and a new monotonic timeline. This preserves the continuity rules already enforced by `WindowScheduler`; no backend-specific timing or identity type enters `resonance-core`.
+
+The eventual backend selection must demonstrate maintained Rust support, Windows 11 playback-loopback and microphone capture, Linux PipeWire-compatible playback and microphone capture, valid mono/stereo negotiation, visible timestamps and discontinuities, bounded callbacks or polling, observable errors, GPL-3.0-only compatibility, and hardware-independent test seams. Backend claims, dependency selection, and implementation are deferred to a separate evidence-gathering milestone.
 
 ## Contract flow
 
@@ -86,10 +113,12 @@ Future products remain separate branches from the waveform input. A later `Spect
 
 - No platform-specific capture library has been selected.
 - No audio capture behavior is implemented.
+- Supported future capture output is limited to mono and two-channel stereo; wider, spatial, and object-based formats are rejected unless the platform supplies a valid mono/stereo representation.
+- Custom downmixing and silent first-two-channel extraction are prohibited.
 - Processing is currently limited to bounded tumbling-window scheduling, waveform subwindows, RMS, sample peak, and explicit peak normalization.
 - FFT, spectrum generation, frequency bands, smoothing, overlapping hops, transport queues, and output backpressure are deferred.
 - No device-discovery interface is defined.
 - No serialization format, network service, IPC mechanism, or transport is defined.
 - No consumer or visualization code belongs in this repository.
 
-See [ADR 0001](decisions/0001-audio-data-contract.md) for the audio contract and [ADR 0002](decisions/0002-bounded-window-scheduling.md) for scheduling and buffering decisions.
+See [ADR 0001](decisions/0001-audio-data-contract.md) for the audio contract, [ADR 0002](decisions/0002-bounded-window-scheduling.md) for scheduling and buffering decisions, and [ADR 0003](decisions/0003-stereo-first-capture-boundary.md) for capture scope and enforcement.
