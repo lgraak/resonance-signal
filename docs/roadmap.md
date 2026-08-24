@@ -153,9 +153,20 @@
 - Kept retry counters, recovery state, decisions, snapshots, and cooldown private to `resonance-agent`; `resonance-core` and `resonance-api` remain unchanged.
 - Kept all recovery execution disabled: no recovery authorization is consumed, no automatic attempt is committed, and no retry loop, timer, sleep, backoff execution, watcher, reconnect, default-device following, or replacement owner exists.
 
+## Milestone 6I-A: Recovery configuration model
+
+- Added a private `resonance-agent` validation boundary that converts a complete configuration definition into an owned immutable snapshot; missing fields and invalid definitions fail closed without repair or fallback defaults.
+- Represented the maximum automatic recovery-attempt budget and exhaustion behavior, required cooldown and duration, backoff strategy and maximum delay, jitter requirements, stable agent-level failure classification, and stable-run reset evidence and duration without implementing any algorithm, clock, timer, scheduler, entropy source, or recovery action.
+- Required enabled automatic recovery to have a finite nonzero budget, at least one explicitly eligible or evidence-guarded failure class, compatible typed evidence for guarded device/reconfiguration/resource/format failures, nonzero cooldown, bounded nonzero backoff, coherent jitter bounds, and consistent cooldown/backoff/stable-run reset rules. An explicitly disabled definition requires zero budget, all failures non-retryable, disabled delays, and new-intent-only reset.
+- Assigned each accepted definition an explicit nonzero configuration version plus a deterministic fingerprint of its canonical typed content. Equivalent definitions with the same version have the same identity; changing content or version invalidates prior assumptions even if a caller reuses a version.
+- Embedded the full immutable configuration snapshot and its identity in the supervisor's owned recovery-evaluation snapshot while retaining the identity in retry state for stale-state checks.
+- Kept the diagnostic runtime on an explicit, validated, recovery-disabled internal definition. Numeric values used to exercise enabled configuration are test-only and do not establish production retry, cooldown, backoff, jitter, or stable-run values.
+- Added hardware-independent tests for stable identity, missing fields, contradictory and unsafe combinations, immutable snapshot ownership, configuration-change invalidation, and the absence of retry-state mutation during validation.
+- Kept configuration loading, file and environment sources, runtime reload, policy application of the new fields, retry execution, timers, reconnect, replacement owners, endpoint watching, and default-device following deferred.
+
 ## Later milestones
 
-- Define operational retry configuration and select concrete retry/backoff values only from collected evidence in a separately scoped milestone.
+- Select operational retry/backoff values from collected evidence and explicitly connect the validated configuration fields to policy evaluation in a separately scoped milestone.
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.

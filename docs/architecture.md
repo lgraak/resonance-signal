@@ -197,7 +197,33 @@ After joined completion, the supervisor copies current intent, intent generation
 
 Cooldown is represented as `NotRequired`, `Pending`, `Satisfied`, or `Invalidated`, correlated by opaque eligibility and satisfaction evidence. It does not contain a clock, deadline, duration, timer, or sleep. Satisfying cooldown only updates evidence; it does not allocate an attempt.
 
-The runtime `CaptureSupervisor` now owns `RetryState` and invokes the evaluator after recording terminal and cleanup facts. A permit-replacement result is retained as advisory data only: it is not converted into a recovery authorization, committed recovery attempt, factory call, or owner. The state module itself still has no owner factory, device integration, event sink, clock, thread, or scheduling mechanism. No timer, watcher, reconnect, default-device following, or replacement exists. This is the implementation of the already accepted boundaries in [ADR 0007](decisions/0007-capture-supervisor-boundary.md), [ADR 0008](decisions/0008-recovery-policy-boundary.md), and [ADR 0009](decisions/0009-retry-state-and-policy-boundary.md); no new ADR is required.
+The recovery configuration boundary is a private sibling of retry state and recovery policy inside `resonance-agent`:
+
+```text
+untrusted complete definition
+        |
+        v
+fail-closed structural validation
+        |
+        +-- reject missing, contradictory, zero-delay, or unbounded-loop inputs
+        |
+        v
+owned immutable configuration snapshot
+        |
+        +-- explicit nonzero version
+        +-- deterministic canonical-content fingerprint
+        |
+        v
+supervisor recovery-evaluation snapshot
+```
+
+The configuration model represents the maximum count of automatic replacement attempts and exhaustion behavior; whether cooldown is required and its minimum duration; fixed, linear, or exponential backoff parameters and a maximum delay; forbidden or bounded-required jitter; retryable, non-retryable, or additional-evidence treatment for stable agent-level failure classes; and new-intent or evidenced stable-run reset behavior. It does not retain platform errors. It selects no production retry, cooldown, backoff, jitter, or stable-run values.
+
+An enabled definition must pair a nonzero finite budget and an explicitly eligible or evidence-guarded failure class with nonzero cooldown, bounded nonzero backoff, and coherent delay/stable-run reset rules. An explicitly disabled definition has zero automatic attempts, classifies every failure as non-retryable, disables cooldown and backoff, and resets only on a new intent. Validation rejects instead of repairing any mismatch. The accepted object exposes no mutator and owns its values, so later mutation of the input definition cannot alter a captured snapshot.
+
+Configuration identity includes both a caller-controlled nonzero version and a deterministic two-lane fingerprint over a canonical encoding of all typed fields. The fingerprint is an identity checksum, not an authentication primitive. Identical content at the same version is stable; changing content or version changes identity. Retry state records that identity when a capture intent begins, and the recovery-evaluation snapshot owns the full accepted configuration, allowing future execution to invalidate decisions when either identity or content is no longer current.
+
+The runtime `CaptureSupervisor` owns `RetryState`, retains an explicit validated recovery-disabled configuration, and invokes the evaluator after recording terminal and cleanup facts. The newly represented configuration values are captured but are not yet connected to policy outcomes. A permit-replacement result remains advisory data only: it is not converted into a recovery authorization, committed recovery attempt, factory call, or owner. The configuration and state modules have no owner factory, device integration, event sink, clock, entropy source, thread, or scheduling mechanism. No configuration loading or reload, timer, watcher, reconnect, default-device following, or replacement exists. The lifecycle and state integration implement [ADR 0007](decisions/0007-capture-supervisor-boundary.md), [ADR 0008](decisions/0008-recovery-policy-boundary.md), and [ADR 0009](decisions/0009-retry-state-and-policy-boundary.md); the accepted configuration boundary is recorded in [ADR 0010](decisions/0010-recovery-configuration-model.md).
 
 A future replacement would still require a new `StreamId`, frame index zero, and stream time zero; the supervisor cannot conceal the prior `Error`/`Ended` transition or synthesize continuity. Consumers observe lifecycle facts and platform-neutral errors, not policy state, attempt counts, or parsed diagnostics.
 
@@ -242,7 +268,7 @@ Future products remain separate branches from the waveform input. A later `Spect
 
 ## Current constraints
 
-- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner and a recovery-disabled supervisor in `resonance-agent`; the supervisor owns its deterministic retry state, evaluates immutable snapshots, and records decision-only policy results. No reconnecting service, retry loop, timer, backoff execution, replacement behavior, or service installation exists.
+- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner and a recovery-disabled supervisor in `resonance-agent`; the supervisor owns its deterministic retry state and validated immutable recovery configuration, evaluates immutable snapshots, and records decision-only policy results. No configuration loading/reload, reconnecting service, retry loop, timer, backoff execution, replacement behavior, or service installation exists.
 - Windows microphone capture and all Linux capture remain unimplemented.
 - Supported future capture output is limited to mono and two-channel stereo; wider, spatial, and object-based formats are rejected unless the platform supplies a valid mono/stereo representation.
 - Custom downmixing and silent first-two-channel extraction are prohibited.

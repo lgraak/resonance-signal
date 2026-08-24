@@ -13,6 +13,7 @@ use crate::recovery::{
     DeviceUnavailableCause, RecoveryCause, RecoveryDecision, RecoveryDecisionReason,
     SourceReconfigurationCause,
 };
+use crate::recovery_config::RecoveryConfigurationIdentity;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct IntentGeneration(u64);
@@ -31,9 +32,6 @@ impl StateRevision {
         self.0
     }
 }
-
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) struct PolicyConfigurationId(pub(crate) u64);
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct AttemptOrdinal(u64);
@@ -165,7 +163,7 @@ pub(crate) struct ExhaustionRecord {
     pub(crate) evaluated_revision: StateRevision,
     pub(crate) attempt_id: AttemptId,
     pub(crate) reason: ExhaustionReason,
-    pub(crate) configuration_id: PolicyConfigurationId,
+    pub(crate) configuration_id: RecoveryConfigurationIdentity,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -270,7 +268,7 @@ pub(crate) struct RetrySnapshot {
     pub(crate) desired_running: bool,
     pub(crate) intent_generation: IntentGeneration,
     pub(crate) state_revision: StateRevision,
-    pub(crate) configuration_id: PolicyConfigurationId,
+    pub(crate) configuration_id: RecoveryConfigurationIdentity,
     pub(crate) phase: RetryPhase,
     pub(crate) attempts_started: u64,
     pub(crate) current_attempt: Option<AttemptState>,
@@ -307,7 +305,7 @@ impl RetrySnapshot {
 pub(crate) struct RecoveryAuthorization {
     pub(crate) intent_generation: IntentGeneration,
     pub(crate) state_revision: StateRevision,
-    pub(crate) configuration_id: PolicyConfigurationId,
+    pub(crate) configuration_id: RecoveryConfigurationIdentity,
     pub(crate) recovery_episode: Option<RecoveryEpisodeId>,
     pub(crate) prior_attempt_id: Option<AttemptId>,
     pub(crate) reason: RecoveryDecisionReason,
@@ -351,7 +349,7 @@ pub(crate) struct RetryState<const HISTORY_CAPACITY: usize> {
     last_intent_generation: u64,
     intent_generation: Option<IntentGeneration>,
     state_revision: StateRevision,
-    configuration_id: Option<PolicyConfigurationId>,
+    configuration_id: Option<RecoveryConfigurationIdentity>,
     desired_running: bool,
     phase: RetryPhase,
     attempts_started: u64,
@@ -390,7 +388,7 @@ impl<const HISTORY_CAPACITY: usize> RetryState<HISTORY_CAPACITY> {
     /// Creates a fresh capture-intent generation without creating an owner.
     pub(crate) fn explicit_start(
         &mut self,
-        configuration_id: PolicyConfigurationId,
+        configuration_id: RecoveryConfigurationIdentity,
     ) -> Result<IntentGeneration, RetryTransitionError> {
         if self.desired_running {
             return Err(RetryTransitionError::IntentAlreadyRunning);
@@ -989,7 +987,8 @@ mod tests {
     use crate::recovery::{evaluate_recovery, RecoveryContext, RecoveryEvidence};
     use resonance_api::contract::RetryHint;
 
-    const CONFIGURATION: PolicyConfigurationId = PolicyConfigurationId(17);
+    const CONFIGURATION: RecoveryConfigurationIdentity =
+        RecoveryConfigurationIdentity::test_only(17, 17);
 
     fn state() -> RetryState<3> {
         RetryState::new().expect("test history capacity is nonzero")
@@ -1304,6 +1303,20 @@ mod tests {
             Err(RetryTransitionError::DecisionDoesNotPermitRecovery)
         );
         assert_eq!(state.snapshot().unwrap(), before);
+    }
+
+    #[test]
+    fn configuration_identity_mismatch_invalidates_snapshot_and_authorization() {
+        let (mut state, _, _) = failed_initial_attempt(RetryFailureCause::Interrupted, false);
+        let mut evaluated = state.snapshot().unwrap();
+        evaluated.configuration_id = RecoveryConfigurationIdentity::test_only(18, 18);
+        let authorization = permit(&evaluated);
+
+        assert!(!state.is_current_snapshot(&evaluated));
+        assert_eq!(
+            state.commit_recovery_attempt(&authorization),
+            Err(RetryTransitionError::StaleSnapshot)
+        );
     }
 
     #[test]

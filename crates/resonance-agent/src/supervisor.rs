@@ -11,9 +11,10 @@ use crate::recovery::{
     evaluate_recovery, DeviceUnavailableCause, RecoveryCause, RecoveryContext, RecoveryDecision,
     RecoveryEvidence,
 };
-use crate::retry_state::{
-    AttemptId, CooldownState, PolicyConfigurationId, RetryFailureCause, RetrySnapshot, RetryState,
+use crate::recovery_config::{
+    RecoveryConfigurationInput, RecoveryConfigurationSnapshot, RecoveryConfigurationVersion,
 };
+use crate::retry_state::{AttemptId, CooldownState, RetryFailureCause, RetrySnapshot, RetryState};
 use crate::windows::{
     CaptureEnd, CaptureOwner, CaptureOwnerCompletion, CaptureOwnerShutdownTimeout,
     CaptureOwnerStart, CaptureOwnerStartError,
@@ -228,7 +229,8 @@ impl CaptureTerminalObservation {
 }
 
 const RETRY_HISTORY_CAPACITY: usize = 16;
-const POLICY_CONFIGURATION: PolicyConfigurationId = PolicyConfigurationId(1);
+const RECOVERY_DISABLED_CONFIGURATION_VERSION: RecoveryConfigurationVersion =
+    RecoveryConfigurationVersion::new(1).expect("disabled configuration version is nonzero");
 
 /// Immutable agent-internal lifecycle evidence supplied to recovery policy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -244,6 +246,7 @@ pub(crate) struct RecoveryLifecycleSnapshot {
 /// Owned, immutable input for one side-effect-free recovery evaluation.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct RecoveryEvaluationSnapshot {
+    pub(crate) configuration: RecoveryConfigurationSnapshot,
     pub(crate) retry_state: RetrySnapshot,
     pub(crate) lifecycle: RecoveryLifecycleSnapshot,
     pub(crate) cause: RecoveryCause,
@@ -251,6 +254,11 @@ pub(crate) struct RecoveryEvaluationSnapshot {
 }
 
 impl RecoveryEvaluationSnapshot {
+    fn configuration_is_current(&self, current: &RecoveryConfigurationSnapshot) -> bool {
+        self.configuration.is_same_configuration(current)
+            && self.retry_state.configuration_id == current.identity()
+    }
+
     fn evaluate(
         &self,
         current_desired_running: bool,
@@ -285,6 +293,7 @@ pub struct CaptureSupervisor {
     observation: Arc<Mutex<CaptureTerminalObservation>>,
     owner: Option<Box<dyn SupervisedCaptureOwner>>,
     state: CaptureSupervisorState,
+    recovery_configuration: RecoveryConfigurationSnapshot,
     retry_state: RetryState<RETRY_HISTORY_CAPACITY>,
     resources_released: bool,
     completion: Option<CaptureSupervisorCompletion>,
@@ -303,12 +312,17 @@ impl CaptureSupervisor {
         factory: impl CaptureOwnerFactory + 'static,
         on_event: impl FnMut(StreamEvent) + Send + 'static,
     ) -> Self {
+        let recovery_configuration =
+            RecoveryConfigurationInput::recovery_disabled(RECOVERY_DISABLED_CONFIGURATION_VERSION)
+                .validate()
+                .expect("the explicit recovery-disabled configuration is valid");
         Self {
             factory: Box::new(factory),
             on_event: Some(Box::new(on_event)),
             observation: Arc::new(Mutex::new(CaptureTerminalObservation::default())),
             owner: None,
             state: CaptureSupervisorState::Idle,
+            recovery_configuration,
             retry_state: RetryState::new().expect("retry history capacity is nonzero"),
             resources_released: false,
             completion: None,
@@ -358,8 +372,12 @@ impl CaptureSupervisor {
         &self,
         evaluation: &RecordedRecoveryEvaluation,
     ) -> bool {
-        self.retry_state
-            .is_current_snapshot(&evaluation.snapshot.retry_state)
+        evaluation
+            .snapshot
+            .configuration_is_current(&self.recovery_configuration)
+            && self
+                .retry_state
+                .is_current_snapshot(&evaluation.snapshot.retry_state)
     }
 
     /// Reports the mechanical boundary required by future recovery policy.
@@ -381,7 +399,7 @@ impl CaptureSupervisor {
 
         let generation = self
             .retry_state
-            .explicit_start(POLICY_CONFIGURATION)
+            .explicit_start(self.recovery_configuration.identity())
             .expect("an idle supervisor can begin a new capture intent");
         let attempt_id = self
             .retry_state
@@ -619,6 +637,7 @@ impl CaptureSupervisor {
             ..RecoveryEvidence::default()
         };
         Some(RecoveryEvaluationSnapshot {
+            configuration: self.recovery_configuration.clone(),
             retry_state,
             lifecycle,
             cause,
@@ -630,6 +649,7 @@ impl CaptureSupervisor {
         let Some(snapshot) = self.recovery_snapshot() else {
             return;
         };
+        debug_assert!(snapshot.configuration_is_current(&self.recovery_configuration));
         let decision = snapshot.evaluate(
             self.retry_state.desired_running(),
             self.retry_state
@@ -1201,7 +1221,14 @@ mod tests {
         let after = harness.supervisor.retry_snapshot().unwrap();
         assert_eq!(first, second);
         assert_eq!(before, after);
-        assert_eq!(first.retry_state.configuration_id, POLICY_CONFIGURATION);
+        assert_eq!(
+            first.retry_state.configuration_id,
+            first.configuration.identity()
+        );
+        assert_eq!(
+            first.configuration.identity().version(),
+            RECOVERY_DISABLED_CONFIGURATION_VERSION
+        );
         assert_eq!(
             first.lifecycle.attempt_id,
             before.current_attempt.unwrap().id
@@ -1224,6 +1251,23 @@ mod tests {
         assert_eq!(harness.creations.load(Ordering::SeqCst), 1);
         assert_eq!(harness.maximum_active.load(Ordering::SeqCst), 1);
         assert_eq!(harness.active.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn validating_configuration_cannot_mutate_supervisor_or_create_an_owner() {
+        let harness = harness(interrupted_plan(), |_| {});
+        let before_state = harness.supervisor.state();
+        let before_snapshot = harness.supervisor.retry_snapshot();
+
+        let version = RecoveryConfigurationVersion::new(2).expect("test version is nonzero");
+        let accepted = RecoveryConfigurationInput::recovery_disabled(version)
+            .validate()
+            .expect("explicit disabled configuration is valid");
+
+        assert_eq!(accepted.identity().version(), version);
+        assert_eq!(harness.supervisor.state(), before_state);
+        assert_eq!(harness.supervisor.retry_snapshot(), before_snapshot);
+        assert_eq!(harness.creations.load(Ordering::SeqCst), 0);
     }
 
     #[test]
