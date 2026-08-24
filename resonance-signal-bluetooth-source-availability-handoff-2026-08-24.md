@@ -17,11 +17,11 @@ Collect bounded real-world evidence for one Bluetooth playback endpoint cohort (
 
 - branch: `main`
 - remote: `origin` → `https://github.com/lgraak/resonance-signal.git`
-- branch: `main` at `f7d8c08`
-- HEAD commit: `f7d8c08 (Collect Bluetooth source availability evidence)`
+- branch: `main` at `fe2d2b2`
+- HEAD commit: `fe2d2b2 (Update Bluetooth handoff repository metadata)`
 - working tree status at handoff: clean
 - remote state:
-  - `origin/main` at `f7d8c08`
+- `origin/main` at `fe2d2b2`
 
 ## Completed Work
 
