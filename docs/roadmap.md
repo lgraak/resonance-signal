@@ -36,10 +36,17 @@
 - Prohibited silent first-two-channel extraction and custom downmixing without a separate evidence-backed decision.
 - Defined format, batch, timing, identity, lifecycle, diagnostic, and backend-evaluation requirements without selecting a dependency or implementing capture.
 
+## Milestone 4B: Capture backend selection
+
+- Evaluated direct WASAPI and PipeWire access, focused Rust bindings, CPAL, and GStreamer against the capture contract using current upstream documentation and source.
+- Selected `wasapi-rs` 0.24.0 as the initial Windows direction and official `pipewire-rs` 0.10.1 bindings as the initial Linux direction.
+- Rejected a third-party cross-platform capture layer for the first implementation because required native timestamp-validity, source-position, and provenance evidence would be lost.
+- Defined one bounded Windows playback-loopback prototype as the next implementation milestone without adding dependencies or capture code.
+
 ## Later milestones
 
-- Evaluate candidate capture backends against the Milestone 4A criteria using authoritative Windows and Linux evidence; recommend one bounded prototype without adding it to production.
-- Implement capture providers behind platform-neutral boundaries.
+- Implement and validate one bounded Windows playback-loopback adapter behind the existing platform-neutral boundary.
+- Add microphone capture and the Linux PipeWire adapter only after the first prototype evidence is reviewed.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
 

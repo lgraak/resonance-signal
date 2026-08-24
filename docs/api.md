@@ -89,7 +89,7 @@ Selected playback devices, microphones, and virtual devices are all addressed by
 
 ## Capture-provider boundary
 
-Platform capture belongs behind orchestration in `resonance-agent`, not in `resonance-core` or `resonance-api`. A future backend boundary needs only to resolve a selected source, negotiate and validate its format, start and stop capture, and deliver bounded waveform batches or explicit lifecycle failures. A backend-specific generic framework or async runtime is not part of this contract.
+Platform capture belongs behind orchestration in `resonance-agent`, not in `resonance-core` or `resonance-api`. The selected initial approaches are `wasapi-rs` on Windows and official PipeWire Rust bindings on Linux; neither dependency is part of this API. A backend boundary needs only to resolve a selected source, negotiate and validate its format, start and stop capture, and deliver bounded waveform batches or explicit lifecycle failures. A backend-specific generic framework or async runtime is not part of this contract.
 
 Before a stream starts, capture orchestration must:
 
@@ -140,6 +140,6 @@ The following remain experimental in 0.1:
 - transport, framing, delivery, backpressure, and authentication;
 - wall-clock correlation between streams or hosts.
 
-Backend selection is also deferred. Candidates must later be evaluated for maintained Rust support; Windows 11 playback-loopback and microphone capture; Linux PipeWire-compatible playback and microphone capture; valid mono/stereo negotiation; sample-rate, timestamp, and discontinuity visibility; bounded callback or polling behavior; observable platform errors; GPL-3.0-only license compatibility; and test seams that do not require audio hardware in core tests. No current documentation claims that WASAPI, PipeWire, or a particular Rust library satisfies those criteria.
+Backend selection is recorded in [ADR 0004](decisions/0004-capture-backend-selection.md). The choice does not change the consumer contract: platform types and dependencies remain private to `resonance-agent`, and capture implementation is still deferred. The next milestone is one bounded Windows playback-loopback adapter prototype with fake-adapter failure-path tests; microphone and Linux implementation do not proceed simultaneously.
 
 Adding a transport requires a separate decision record. It must version its serialized schema independently and preserve the semantic contract above rather than treating Rust memory layout as a wire format.

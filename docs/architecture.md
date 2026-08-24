@@ -31,7 +31,7 @@ Owns the consumer-facing semantic contract: source selection, subscriptions, str
 
 ### `resonance-agent`
 
-Provides the executable entry point. It owns future platform-capture adapters, capture-format enforcement, and provider lifecycle orchestration. No capture adapter is implemented or selected yet.
+Provides the executable entry point. It owns future platform-capture adapters, capture-format enforcement, and provider lifecycle orchestration. The selected initial directions are `wasapi-rs` for Windows and official `pipewire-rs` bindings for Linux; neither dependency nor an adapter is implemented yet.
 
 Dependency direction is one way:
 
@@ -68,7 +68,9 @@ Platform-provided conversion is acceptable only when it yields a valid mono or s
 
 Interruption, restart, reconfiguration, timestamp discontinuity, or format change ends the stream. A resumed source receives a new stream ID, frame index zero, and a new monotonic timeline. This preserves the continuity rules already enforced by `WindowScheduler`; no backend-specific timing or identity type enters `resonance-core`.
 
-The eventual backend selection must demonstrate maintained Rust support, Windows 11 playback-loopback and microphone capture, Linux PipeWire-compatible playback and microphone capture, valid mono/stereo negotiation, visible timestamps and discontinuities, bounded callbacks or polling, observable errors, GPL-3.0-only compatibility, and hardware-independent test seams. Backend claims, dependency selection, and implementation are deferred to a separate evidence-gathering milestone.
+Backend evaluation selected platform-specific safe wrappers that retain native evidence: `wasapi-rs` 0.24.0 for Windows and `pipewire-rs` 0.10.1 for Linux. A third-party cross-platform capture abstraction is not selected because the evaluated generic surface loses timing-validity or provenance needed by the uninterrupted-stream contract. These dependencies and capture implementation remain deferred to the next milestone.
+
+The Windows adapter will retain WASAPI device position, QPC timestamp, packet flags, endpoint identity, and endpoint/session notifications before mapping them to provider lifecycle. The Linux adapter will retain negotiated SPA format, target properties, stream and registry events, buffer metadata, and graph timing. Only bounded samples and platform-neutral accepted format, source, stream, lifecycle, and diagnostic semantics cross the adapter boundary.
 
 ## Contract flow
 
@@ -111,7 +113,7 @@ Future products remain separate branches from the waveform input. A later `Spect
 
 ## Current constraints
 
-- No platform-specific capture library has been selected.
+- Initial platform capture directions are selected, but no capture dependency has been added.
 - No audio capture behavior is implemented.
 - Supported future capture output is limited to mono and two-channel stereo; wider, spatial, and object-based formats are rejected unless the platform supplies a valid mono/stereo representation.
 - Custom downmixing and silent first-two-channel extraction are prohibited.
@@ -121,4 +123,4 @@ Future products remain separate branches from the waveform input. A later `Spect
 - No serialization format, network service, IPC mechanism, or transport is defined.
 - No consumer or visualization code belongs in this repository.
 
-See [ADR 0001](decisions/0001-audio-data-contract.md) for the audio contract, [ADR 0002](decisions/0002-bounded-window-scheduling.md) for scheduling and buffering decisions, and [ADR 0003](decisions/0003-stereo-first-capture-boundary.md) for capture scope and enforcement.
+See [ADR 0001](decisions/0001-audio-data-contract.md) for the audio contract, [ADR 0002](decisions/0002-bounded-window-scheduling.md) for scheduling and buffering decisions, [ADR 0003](decisions/0003-stereo-first-capture-boundary.md) for capture scope and enforcement, and [ADR 0004](decisions/0004-capture-backend-selection.md) for backend evidence and implementation direction.
