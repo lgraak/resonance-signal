@@ -1,7 +1,9 @@
 [package]
 name = "resonance-agent"
-version = "0.1.0"
-edition = "2021"
-license = "GPL-3.0-only"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Executable entry point for Resonance Signal"
 
 [dependencies]

@@ -1,21 +1,46 @@
 # Resonance Signal
 
-A cross-platform audio signal provider for real-time audio telemetry and visualization.
+Resonance Signal is a standalone, cross-platform audio signal provider. It is intended to capture audio sources, process audio data, and expose a reusable interface that independent applications can consume.
 
-Resonance Signal captures audio sources and exposes reusable audio data to clients. The first planned consumer is an InfoPanel visualization plugin, but the provider is designed to remain independent.
-
-## Goals
-
-- Low latency audio capture
-- Cross-platform support
-- Efficient resource usage
-- Reusable API for multiple clients
-- Open source development under GPLv3
+The provider is the product. Consumers are clients, and visualization is outside this repository's scope.
 
 ## Status
 
-Project initialization.
+The project is in its foundation milestone. The Rust workspace, crate boundaries, documentation structure, and cross-platform CI are established. Audio capture, signal-processing behavior, client contracts, and service transports are not implemented yet.
+
+## Architecture direction
+
+```text
+Audio Capture Layer
+        |
+        v
+Audio Processing Layer
+        |
+        v
+API / Client Interface
+        |
+        v
+External Consumers
+```
+
+The workspace is divided into three crates:
+
+- `resonance-core`: core data structures, shared types, and provider-independent logic.
+- `resonance-api`: client-facing contracts, serialization types, and API definitions.
+- `resonance-agent`: executable entry point and future capture orchestration.
+
+See [Architecture](docs/architecture.md), [API](docs/api.md), and [Roadmap](docs/roadmap.md) for the current project boundaries.
+
+## Development
+
+Use stable Rust. From the repository root:
+
+```text
+cargo fmt --all --check
+cargo check --workspace --all-targets
+cargo build --workspace
+```
 
 ## License
 
-GPL-3.0-only
+Resonance Signal is licensed under the GNU General Public License, version 3 only (`GPL-3.0-only`). See [LICENSE](LICENSE).

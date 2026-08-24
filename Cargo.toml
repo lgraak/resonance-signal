@@ -5,3 +5,9 @@ members = [
     "crates/resonance-api",
     "crates/resonance-agent",
 ]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+repository = "https://github.com/lgraak/resonance-signal"
