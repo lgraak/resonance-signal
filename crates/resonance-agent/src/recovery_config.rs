@@ -406,6 +406,26 @@ impl RecoveryConfigurationSnapshot {
         self.identity
     }
 
+    pub(crate) fn maximum_automatic_recovery_attempts(&self) -> u32 {
+        self.configuration
+            .attempt_budget
+            .maximum_automatic_recovery_attempts
+    }
+
+    pub(crate) fn cooldown(&self) -> CooldownConfiguration {
+        self.configuration.cooldown
+    }
+
+    pub(crate) fn backoff(&self) -> BackoffConfiguration {
+        self.configuration.backoff
+    }
+
+    pub(crate) fn failure_disposition(&self, class: RecoveryFailureClass) -> FailureDisposition {
+        self.configuration
+            .failure_classification
+            .classification(class)
+    }
+
     pub(crate) fn is_same_configuration(&self, other: &Self) -> bool {
         self.identity == other.identity && self.configuration == other.configuration
     }

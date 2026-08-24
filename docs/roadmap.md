@@ -164,9 +164,20 @@
 - Added hardware-independent tests for stable identity, missing fields, contradictory and unsafe combinations, immutable snapshot ownership, configuration-change invalidation, and the absence of retry-state mutation during validation.
 - Kept configuration loading, file and environment sources, runtime reload, policy application of the new fields, retry execution, timers, reconnect, replacement owners, endpoint watching, and default-device following deferred.
 
+## Milestone 6I-B: Recovery configuration to policy integration
+
+- Connected validated immutable recovery configuration, configuration-bound `RetrySnapshot`, and typed lifecycle/source evidence to the pure recovery-policy entry point.
+- Made stable failure-class dispositions deterministic policy gates: non-retryable classes remain stopped, retryable classes continue through the existing cause rules, and guarded classes require their configured typed evidence.
+- Derived attempt availability from the configured maximum automatic-recovery attempts and recovery-episode accounting, including sticky exhaustion; caller-provided budget conclusions cannot override state.
+- Required satisfied retry-state cooldown evidence whenever validated cooldown/backoff policy requires delay, without calculating a delay, reading a clock, running a timer, sleeping, scheduling, or executing backoff.
+- Rejected stale configuration before permission when the current version/fingerprint, captured configuration, or retry-state binding disagree. A Config A evaluation cannot authorize after Config B becomes current.
+- Preserved reset safety: owner creation, successful start, and `Started` do not clear exhaustion; invalid reset evidence leaves state unchanged, while a new explicit intent creates fresh accounting.
+- Added hardware-independent tests for enabled and disabled classifications, guarded source evidence, budgets, cooldown, unsupported format, panic, configuration identity mismatch, Config A-to-B invalidation, reset behavior, and the decision-versus-execution boundary.
+- Kept the runtime on its explicit recovery-disabled definition and retained decisions as advisory data only. No authorization is consumed, no automatic attempt is committed, and no owner, retry, timer, watcher, reconnect, or default-device-following behavior was added.
+
 ## Later milestones
 
-- Select operational retry/backoff values from collected evidence and explicitly connect the validated configuration fields to policy evaluation in a separately scoped milestone.
+- Select operational retry/backoff values from collected evidence, define deterministic delay calculation and jitter sampling, and design a configuration source/reload boundary in separately scoped milestones.
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.

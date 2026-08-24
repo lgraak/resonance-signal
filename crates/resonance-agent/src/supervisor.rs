@@ -8,13 +8,13 @@ use std::time::Duration;
 use resonance_api::contract::{ErrorKind, RetryHint, StreamEndReason, StreamEvent};
 
 use crate::recovery::{
-    evaluate_recovery, DeviceUnavailableCause, RecoveryCause, RecoveryContext, RecoveryDecision,
-    RecoveryEvidence,
+    evaluate_recovery_policy, DeviceUnavailableCause, RecoveryCause, RecoveryContext,
+    RecoveryDecision, RecoveryEvidence,
 };
 use crate::recovery_config::{
     RecoveryConfigurationInput, RecoveryConfigurationSnapshot, RecoveryConfigurationVersion,
 };
-use crate::retry_state::{AttemptId, CooldownState, RetryFailureCause, RetrySnapshot, RetryState};
+use crate::retry_state::{AttemptId, RetryFailureCause, RetrySnapshot, RetryState};
 use crate::windows::{
     CaptureEnd, CaptureOwner, CaptureOwnerCompletion, CaptureOwnerShutdownTimeout,
     CaptureOwnerStart, CaptureOwnerStartError,
@@ -261,10 +261,14 @@ impl RecoveryEvaluationSnapshot {
 
     fn evaluate(
         &self,
+        current_configuration: &RecoveryConfigurationSnapshot,
         current_desired_running: bool,
         current_intent_generation: u64,
     ) -> RecoveryDecision {
-        evaluate_recovery(
+        evaluate_recovery_policy(
+            &self.configuration,
+            current_configuration.identity(),
+            &self.retry_state,
             RecoveryContext {
                 desired_running: current_desired_running,
                 current_intent_generation,
@@ -600,13 +604,6 @@ impl CaptureSupervisor {
         let attempt = retry_state.current_attempt?;
         let completion = self.completion?;
         let observation = self.terminal_observation();
-        let attempts_remaining = retry_state
-            .recovery_episode
-            .is_none_or(|episode| episode.exhaustion.is_none());
-        let cooldown_complete = matches!(
-            retry_state.cooldown,
-            CooldownState::NotRequired | CooldownState::Satisfied { .. }
-        );
         let retry_hint = match completion {
             CaptureSupervisorCompletion::Failed { retry_hint, .. } => Some(retry_hint),
             _ => observation.error().map(|(_, retry_hint)| retry_hint),
@@ -632,8 +629,6 @@ impl CaptureSupervisor {
             owner_completed: Some(lifecycle.owner_completed),
             resources_released: Some(lifecycle.resources_released),
             retry_hint,
-            attempts_remaining: Some(attempts_remaining),
-            cooldown_complete: Some(cooldown_complete),
             ..RecoveryEvidence::default()
         };
         Some(RecoveryEvaluationSnapshot {
@@ -651,6 +646,7 @@ impl CaptureSupervisor {
         };
         debug_assert!(snapshot.configuration_is_current(&self.recovery_configuration));
         let decision = snapshot.evaluate(
+            &self.recovery_configuration,
             self.retry_state.desired_running(),
             self.retry_state
                 .intent_generation()
@@ -701,7 +697,14 @@ mod tests {
 
     use crate::capture::CaptureError;
     use crate::recovery::RecoveryDecisionReason;
-    use crate::retry_state::{AttemptLifecycle, RetryPhase};
+    use crate::recovery_config::{
+        AutomaticRecoveryAttemptBudget, BackoffConfiguration, BackoffDelayStrategy,
+        CooldownConfiguration, DelayResetBehavior, ExhaustionBehavior, FailureClassificationPolicy,
+        FailureDisposition, JitterRequirement, RecoveryFailureClass, StableRunResetPolicy,
+    };
+    use crate::retry_state::{
+        AttemptLifecycle, CooldownEligibilityMarker, CooldownEvidenceId, RetryPhase,
+    };
     use crate::windows::{CaptureReport, CaptureRunError};
 
     struct FakePlan {
@@ -874,6 +877,38 @@ mod tests {
                 CaptureError::DataDiscontinuity,
             )),
         }
+    }
+
+    fn enabled_recovery_configuration() -> RecoveryConfigurationSnapshot {
+        RecoveryConfigurationInput {
+            version: RecoveryConfigurationVersion::new(9),
+            attempt_budget: Some(AutomaticRecoveryAttemptBudget {
+                maximum_automatic_recovery_attempts: 1,
+                exhaustion_behavior: ExhaustionBehavior::RemainStoppedUntilNewIntent,
+            }),
+            cooldown: Some(CooldownConfiguration::Required {
+                minimum_delay: Duration::from_secs(1),
+                reset: DelayResetBehavior::NewIntent,
+            }),
+            backoff: Some(BackoffConfiguration::Required {
+                strategy: BackoffDelayStrategy::Fixed {
+                    delay: Duration::from_secs(1),
+                },
+                maximum_delay: Duration::from_secs(1),
+                jitter: JitterRequirement::Forbidden,
+                reset: DelayResetBehavior::NewIntent,
+            }),
+            failure_classification: Some(
+                FailureClassificationPolicy::uniform(FailureDisposition::NonRetryable)
+                    .with_classification(
+                        RecoveryFailureClass::Interrupted,
+                        FailureDisposition::Retryable,
+                    ),
+            ),
+            stable_run_reset: Some(StableRunResetPolicy::NewIntentOnly),
+        }
+        .validate()
+        .expect("enabled supervisor test configuration is valid")
     }
 
     fn ended(reason: StreamEndReason) -> StreamEvent {
@@ -1238,12 +1273,13 @@ mod tests {
         assert_eq!(first.policy_evidence.owner_completed, Some(true));
         assert_eq!(first.policy_evidence.resources_released, Some(true));
         assert_eq!(first.policy_evidence.retry_hint, Some(RetryHint::RetryNow));
-        assert_eq!(first.policy_evidence.attempts_remaining, Some(true));
+        assert_eq!(first.policy_evidence.attempts_remaining, None);
+        assert_eq!(first.policy_evidence.cooldown_complete, None);
 
         let evaluation = harness.supervisor.recovery_evaluation().unwrap();
         assert_eq!(
             evaluation.decision,
-            RecoveryDecision::PermitReplacement(RecoveryDecisionReason::RetryEligible)
+            RecoveryDecision::RemainStopped(RecoveryDecisionReason::ConfiguredNonRetryable)
         );
         assert!(harness
             .supervisor
@@ -1251,6 +1287,51 @@ mod tests {
         assert_eq!(harness.creations.load(Ordering::SeqCst), 1);
         assert_eq!(harness.maximum_active.load(Ordering::SeqCst), 1);
         assert_eq!(harness.active.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn enabled_policy_can_permit_without_executing_recovery() {
+        let mut harness = harness(interrupted_plan(), |_| {});
+        harness.supervisor.recovery_configuration = enabled_recovery_configuration();
+        harness.supervisor.start().unwrap();
+        harness
+            .supervisor
+            .wait_for_completion(Duration::ZERO)
+            .unwrap();
+
+        assert_eq!(
+            harness.supervisor.recovery_evaluation().unwrap().decision,
+            RecoveryDecision::Wait(RecoveryDecisionReason::CooldownPending)
+        );
+        let waiting = harness.supervisor.retry_state.snapshot().unwrap();
+        let marker = CooldownEligibilityMarker(9);
+        harness
+            .supervisor
+            .retry_state
+            .require_cooldown(&waiting, marker)
+            .unwrap();
+        harness
+            .supervisor
+            .retry_state
+            .satisfy_cooldown(waiting.intent_generation, marker, CooldownEvidenceId(9))
+            .unwrap();
+        harness.supervisor.record_recovery_evaluation();
+
+        assert_eq!(
+            harness.supervisor.recovery_evaluation().unwrap().decision,
+            RecoveryDecision::PermitReplacement(RecoveryDecisionReason::RetryEligible)
+        );
+        assert_eq!(harness.creations.load(Ordering::SeqCst), 1);
+        assert_eq!(harness.maximum_active.load(Ordering::SeqCst), 1);
+        assert_eq!(harness.active.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            harness
+                .supervisor
+                .retry_snapshot()
+                .unwrap()
+                .attempts_started,
+            1
+        );
     }
 
     #[test]
@@ -1271,6 +1352,42 @@ mod tests {
     }
 
     #[test]
+    fn configuration_change_makes_an_old_evaluation_fail_closed() {
+        let mut harness = harness(interrupted_plan(), |_| {});
+        harness.supervisor.start().unwrap();
+        harness
+            .supervisor
+            .wait_for_completion(Duration::ZERO)
+            .unwrap();
+        let old_evaluation = harness.supervisor.recovery_evaluation().unwrap().clone();
+        let new_configuration = RecoveryConfigurationInput::recovery_disabled(
+            RecoveryConfigurationVersion::new(2).expect("test version is nonzero"),
+        )
+        .validate()
+        .expect("replacement configuration is valid");
+
+        harness.supervisor.recovery_configuration = new_configuration;
+
+        assert!(!harness
+            .supervisor
+            .recovery_evaluation_is_current(&old_evaluation));
+        assert_eq!(
+            old_evaluation.snapshot.evaluate(
+                &harness.supervisor.recovery_configuration,
+                harness.supervisor.retry_state.desired_running(),
+                harness
+                    .supervisor
+                    .retry_state
+                    .intent_generation()
+                    .expect("old evaluation belongs to an intent")
+                    .get(),
+            ),
+            RecoveryDecision::RemainStopped(RecoveryDecisionReason::StaleConfiguration)
+        );
+        assert_eq!(harness.creations.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
     fn explicit_stop_invalidates_prior_evaluation_and_late_completion_cannot_recover() {
         let mut completed = harness(interrupted_plan(), |_| {});
         completed.supervisor.start().unwrap();
@@ -1281,7 +1398,7 @@ mod tests {
         let old_evaluation = completed.supervisor.recovery_evaluation().unwrap().clone();
         assert_eq!(
             old_evaluation.decision,
-            RecoveryDecision::PermitReplacement(RecoveryDecisionReason::RetryEligible)
+            RecoveryDecision::RemainStopped(RecoveryDecisionReason::ConfiguredNonRetryable)
         );
 
         completed.supervisor.stop(Duration::ZERO).unwrap();
