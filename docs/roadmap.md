@@ -21,6 +21,13 @@
 - Added explicit peak-normalization helpers that preserve out-of-range headroom.
 - Added synthetic tests for silence, constant and known waveforms, multiple channels, subwindows, invalid input, and normalization.
 
+## Milestone 3B: Bounded window scheduling and processing cadence
+
+- Added configurable, non-overlapping analysis windows with 30 FPS and 60 FPS visualization cadences.
+- Bounded retained partial samples and per-push work without introducing an output queue or async runtime.
+- Added explicit frame-index, timestamp, format, and uninterrupted-stream boundary handling.
+- Added synthetic tests for completion, accumulation, multiple outputs, oversized input, discontinuities, stream changes, and empty input.
+
 ## Later milestones
 
 - Evaluate platform capture requirements and libraries.

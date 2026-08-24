@@ -46,9 +46,27 @@ Raw waveform is the flexibility baseline and must remain available. Provider-com
 - `rms` and `peak` calculate scalar levels for a non-empty finite sample slice. Empty or non-finite input returns `ProcessingError`.
 - `peak_normalization_gain` and `normalize_peak_in_place` provide explicit opt-in peak normalization. Silence uses unity gain, invalid targets are rejected, and targets above `1.0` remain permitted. In-place normalization validates the complete input before changing it.
 
-These functions are synchronous building blocks, not a buffering, scheduling, transport, or service API. Level calculation uses only temporary and output storage proportional to channel count; a `WaveformWindow` itself is zero-copy and no waveform-sized processing buffer is allocated. Inputs are expected to remain small real-time batches rather than unbounded recordings.
+These functions are synchronous building blocks rather than a transport or service API. Level calculation uses only temporary and output storage proportional to channel count; a `WaveformWindow` itself is zero-copy and no waveform-sized processing buffer is allocated. Inputs are expected to remain small real-time batches rather than unbounded recordings.
 
 FFT and spectrum calculation are intentionally not implemented. `SpectrumFrame` remains a separate optional contract shape so a later processing implementation can add spectra or frequency-band products without changing `AudioFrame`, `LevelFrame`, or forcing those products on every subscriber.
+
+## Window scheduling
+
+`resonance-core::scheduling::WindowScheduler` converts contiguous `AudioFrame` batches into complete, owned analysis windows. It is generic over the orchestration layer's stream identity type, so `resonance-core` remains independent of `resonance-api::StreamId`. Each `ScheduledWindow` retains that identity and contains an `AudioFrame`; existing processing functions consume it through `WaveformWindow::entire` without duplicated level or waveform logic.
+
+The scheduler uses non-overlapping tumbling windows:
+
+- `WindowSchedulerConfig::default()` targets `33,333,333 ns`, approximately one output per 30 FPS visualization update, and accepts at most eight windows of input per push.
+- A `16,666,667 ns` target produces approximately 60 updates per second. At 48 kHz the 30 FPS and 60 FPS settings become exactly 1,600 and 800 sample frames.
+- Target duration is converted to the nearest non-zero whole sample-frame count for each stream. Output cadence is sample-clock driven, not wall-clock driven.
+- A window is emitted immediately when enough contiguous samples exist. Windows do not overlap, and the next window begins at the preceding window's end.
+- Slower input remains as a partial window until more frames arrive. Empty input is a no-op; the scheduler never pads, repeats, synthesizes, or emits incomplete data.
+
+Memory and per-call work are bounded. Retained input is always less than one complete window. The configured `max_windows_per_push` limits accepted input and the number of outputs a single call can create; oversized calls return `SchedulingError::OversizedInput` without changing scheduler state. The default therefore accepts at most about 267 ms of 30 FPS input per call. Output queuing and consumer backpressure remain transport responsibilities and must be bounded separately.
+
+Continuity is checked before samples are combined. Source frame indices must be exact. Stream timestamps must match the preceding batch within one nanosecond, allowing only integer timestamp quantization. A frame-index gap, timestamp gap, overlap, or fixed-format change drops the partial window, returns an explicit error, and invalidates that stream identity. Processing resumes only with a new identity. A normal identity change also drops any old partial window, accepts the new stream independently, and reports a `StreamBoundary` containing the discarded frame count. Samples from distinct or discontinuous streams are never combined.
+
+Scheduling is synchronous and arrival-driven. It does not create a timer, async task, capture callback, queue, service, transport, or timeout-based flush. Capture evidence may later justify overlapping hops or a different default, but those are configuration and orchestration decisions rather than changes to `AudioFrame`.
 
 ## Subscriptions and sources
 

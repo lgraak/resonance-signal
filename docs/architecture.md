@@ -23,7 +23,7 @@ Data and dependencies should flow toward the client interface. Presentation and 
 
 ### `resonance-core`
 
-Owns provider-independent signal values, validation, and lightweight processing. The `signal` module defines waveform, level, and spectrum frame structures without capture or transport dependencies. The `processing` module provides zero-copy waveform subwindows, per-channel RMS and peak calculation, and opt-in peak normalization.
+Owns provider-independent signal values, validation, lightweight processing, and bounded analysis-window scheduling. The `signal` module defines waveform, level, and spectrum frame structures without capture or transport dependencies. The `scheduling` module accumulates contiguous waveform batches into complete windows with bounded retention and explicit discontinuity handling. The `processing` module provides zero-copy waveform subwindows, per-channel RMS and peak calculation, and opt-in peak normalization.
 
 ### `resonance-api`
 
@@ -59,17 +59,26 @@ Resonance Signal always treats raw waveform data as the canonical flexibility bo
 
 The provider contract also permits opt-in levels and magnitude spectra. Computing these once in the provider prevents every consumer from repeating the same expensive work and ensures derived frames share explicit source windows. Derived products remain additive: they cannot make waveform access conditional, and visualization-specific aggregation does not belong in the provider.
 
-The first processing path is deliberately direct:
+The first scheduled processing path is deliberately direct:
 
 ```text
 AudioFrame
     |
-    +-- borrowed WaveformWindow --> per-channel RMS + peak --> LevelFrame
+    v
+bounded WindowScheduler --> complete AudioFrame window
+    |                               |
+    |                               +-- borrowed WaveformWindow --> RMS + peak --> LevelFrame
     |
     +-- raw waveform remains independently available
 ```
 
-`WaveformWindow` borrows a complete frame or a frame-aligned subwindow, avoiding waveform copies and exposing channel-specific iteration when needed. Level calculation is synchronous and stateless; capture or orchestration code decides window size, cadence, retention, and whether to publish the derived result. Peak normalization is an explicit slice helper and is never applied implicitly to provider output.
+`WindowScheduler` uses configurable, non-overlapping tumbling windows. Its default is approximately 30 outputs per second; a 60 FPS target is a configuration change. Duration is rounded to the nearest whole sample frame for the active sample rate, so cadence follows the source sample clock. Complete owned output frames allow one window to span several capture batches while remaining directly consumable by the existing zero-copy `WaveformWindow` processing boundary.
+
+The scheduler retains less than one window between calls and bounds accepted work by a configured maximum number of windows per push. It emits immediately on completion, retains partial slow input without padding or timeout flushing, and rejects oversized calls without mutating state. Queuing completed output for slower consumers belongs to a future transport and must have its own bounded backpressure policy.
+
+Frame index, timestamp, fixed format, and caller-supplied uninterrupted-stream identity establish continuity. Gaps, overlaps, timestamp discontinuities, or same-stream format changes return errors, discard partial data, and require a new stream identity. A normal identity change reports the number of discarded partial frames. No invalid or cross-stream samples silently enter an analysis window.
+
+`WaveformWindow` borrows a complete frame or a frame-aligned subwindow, avoiding waveform copies and exposing channel-specific iteration when needed. Level calculation remains synchronous and stateless; orchestration decides whether to schedule and publish the derived result. Peak normalization is an explicit slice helper and is never applied implicitly to provider output.
 
 Future products remain separate branches from the waveform input. A later `SpectrumFrame`, frequency-band frame, or associated FFT metadata can be added as an independently requested product. Consumers that request only waveform or levels do not need to calculate or receive it, and the raw `AudioFrame` contract does not change.
 
@@ -77,10 +86,10 @@ Future products remain separate branches from the waveform input. A later `Spect
 
 - No platform-specific capture library has been selected.
 - No audio capture behavior is implemented.
-- Processing is currently limited to waveform subwindows, RMS, sample peak, and explicit peak normalization.
-- FFT, spectrum generation, frequency bands, smoothing, buffering policy, and processing scheduling are deferred.
+- Processing is currently limited to bounded tumbling-window scheduling, waveform subwindows, RMS, sample peak, and explicit peak normalization.
+- FFT, spectrum generation, frequency bands, smoothing, overlapping hops, transport queues, and output backpressure are deferred.
 - No device-discovery interface is defined.
 - No serialization format, network service, IPC mechanism, or transport is defined.
 - No consumer or visualization code belongs in this repository.
 
-See [ADR 0001](decisions/0001-audio-data-contract.md) for the contract decision and rejected alternatives.
+See [ADR 0001](decisions/0001-audio-data-contract.md) for the audio contract and [ADR 0002](decisions/0002-bounded-window-scheduling.md) for scheduling and buffering decisions.

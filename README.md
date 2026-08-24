@@ -6,7 +6,7 @@ The provider is the product. Consumers are clients, and visualization is outside
 
 ## Status
 
-The foundation, audio-data-contract, and basic signal-processing milestones are complete. The workspace defines provider-independent waveform and derived signal frames, a transport-neutral multi-source contract, zero-copy waveform subwindows, RMS and peak levels, and explicit peak normalization. Audio capture, FFT processing, device discovery, serialization, and service transports are not implemented yet.
+The foundation, audio-data-contract, basic signal-processing, and bounded-window-scheduling milestones are complete. The workspace defines provider-independent waveform and derived signal frames, a transport-neutral multi-source contract, bounded analysis cadence with explicit discontinuity handling, zero-copy waveform subwindows, RMS and peak levels, and explicit peak normalization. Audio capture, FFT processing, device discovery, serialization, and service transports are not implemented yet.
 
 ## Architecture direction
 
