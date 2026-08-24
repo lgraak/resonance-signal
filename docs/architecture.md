@@ -72,6 +72,16 @@ Backend evaluation selected platform-specific safe wrappers that retain native e
 
 The Windows adapter retains WASAPI device position, QPC timestamp, packet flags, endpoint identity, and endpoint/session notifications before mapping them to provider lifecycle. The future Linux adapter will retain negotiated SPA format, target properties, stream and registry events, buffer metadata, and graph timing. Only bounded samples and platform-neutral accepted format, source, stream, lifecycle, and diagnostic semantics cross the adapter boundary.
 
+### Source intent and identity
+
+Source selection uses the hybrid model in [ADR 0013](decisions/0013-source-selection-model.md). Default Playback is a logical role resolved before each future capture attempt; Explicit Source is pinned to one opaque provider-assigned `SourceId`. The provider retains intent separately from the resolved source so a later default resolution may truthfully select a new role owner while an explicit request can fail closed instead of silently substituting another device.
+
+`SourceId` identifies a resolved source within the provider's advertised identity scope. `StreamId` identifies one uninterrupted capture lifetime. The same source can therefore produce many stream identities, while Default Playback can resolve different source identities over time. Friendly names and platform classes are not identity proof, and native endpoint or node identifiers remain private to `resonance-agent`.
+
+Disappearance, replacement, return, reconfiguration, and format change always end the current stream. A later attempt starts a new stream at frame index and stream-relative time zero. Default Playback resolves the then-current role owner; Explicit Source accepts only the same proven identity. Discovery, durable identity persistence, endpoint watching, and recovery execution remain deferred.
+
+The current Windows adapter predates the resolved identity mapping: it emits the logical `default-playback` value as `SourceId` and retains the resolved endpoint name only in diagnostics. A future source-mapping milestone must replace that placeholder behavior before the provider can expose explicit endpoint identities. This design milestone does not change the adapter.
+
 ### Windows production capture data path
 
 ```text
@@ -230,7 +240,7 @@ A future replacement would still require a new `StreamId`, frame index zero, and
 ## Contract flow
 
 1. A consumer submits a `SubscriptionRequest` naming one or more source selectors and signal products.
-2. The provider resolves each selector and emits a `StreamDescriptor` for every uninterrupted source stream.
+2. The provider retains each source intent, resolves it before a capture attempt, and emits a `StreamDescriptor` with the actual source identity for every uninterrupted stream.
 3. The provider emits bounded `SignalPacket` values containing requested waveform, level, or spectrum payloads.
 4. Errors carry a platform-neutral category, scope, and recovery hint.
 5. Interruption, source reconfiguration, or format change ends the stream. Resumption creates a new stream identity and timeline.
@@ -275,8 +285,10 @@ Future products remain separate branches from the waveform input. A later `Spect
 - Processing is currently limited to bounded tumbling-window scheduling, waveform subwindows, RMS, sample peak, and explicit peak normalization.
 - FFT, spectrum generation, frequency bands, smoothing, overlapping hops, transport queues, and output backpressure are deferred.
 - No device-discovery interface is defined.
+- The Windows adapter does not yet map the resolved endpoint identity to the consumer-visible `SourceId`.
+- Source identity persistence across provider lifetimes and platform re-enumeration is not defined.
 - No serialization format, network service, IPC mechanism, or transport is defined.
 - No consumer or visualization code belongs in this repository.
 - End-to-end capture latency is not measured because cross-clock correlation is deferred.
 
-See [ADR 0001](decisions/0001-audio-data-contract.md) for the audio contract, [ADR 0002](decisions/0002-bounded-window-scheduling.md) for scheduling and buffering decisions, [ADR 0003](decisions/0003-stereo-first-capture-boundary.md) for capture scope and enforcement, [ADR 0004](decisions/0004-capture-backend-selection.md) for backend evidence and implementation direction, [ADR 0005](decisions/0005-windows-capture-lifecycle-and-buffering.md) for the production Windows lifecycle and bounded handoff, and [ADR 0006](decisions/0006-capture-owner-lifecycle.md) for explicit owner/thread/shutdown responsibility.
+See [ADR 0001](decisions/0001-audio-data-contract.md) for the audio contract, [ADR 0002](decisions/0002-bounded-window-scheduling.md) for scheduling and buffering decisions, [ADR 0003](decisions/0003-stereo-first-capture-boundary.md) for capture scope and enforcement, [ADR 0004](decisions/0004-capture-backend-selection.md) for backend evidence and implementation direction, [ADR 0005](decisions/0005-windows-capture-lifecycle-and-buffering.md) for the production Windows lifecycle and bounded handoff, [ADR 0006](decisions/0006-capture-owner-lifecycle.md) for explicit owner/thread/shutdown responsibility, and [ADR 0013](decisions/0013-source-selection-model.md) for source intent, identity, and lifecycle semantics.

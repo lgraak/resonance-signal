@@ -196,12 +196,22 @@
 - Kept explicit stop, panic, suspected corruption, invariant failure, incomplete cleanup, active ownership, exhausted accounting, unchanged causal preconditions, and unsupported cohorts outside automatic recovery.
 - Kept experiments, fault-injection tooling, numeric thresholds, production retry values, telemetry, timers, watchers, reconnect, replacement owners, and every recovery execution mechanism deferred. Recovery evidence and policy internals remain private to `resonance-agent`.
 
+## Milestone 6M: Source selection model
+
+- Reviewed Windows default-playback, endpoint-removal, Bluetooth-availability, manual-restart, and source-identity evidence without changing runtime behavior.
+- Selected a hybrid source intent model: Default Playback re-resolves the platform role for each future attempt, while Explicit Source accepts only one opaque provider-assigned identity.
+- Separated durable selection intent, resolved `SourceId`, and uninterrupted `StreamId`; friendly names and backend-native identifiers are not portable identity.
+- Defined disappearance, replacement, and return as visible stream boundaries. Later attempts always create a new stream identity and timeline, even when the same source returns.
+- Mapped the portable model to the Windows default-role/endpoint distinction and set constraints for a future PipeWire default-sink and stable-node-property mapping.
+- Kept discovery, UI, platform mapping details, identity persistence, Linux implementation, endpoint watching, retry timing, owner replacement, and all recovery execution deferred.
+
 ## Later milestones
 
 - Execute the accepted measurement plan, collect representative operational evidence, and review candidate failure classes without enabling recovery.
 - Select exact retry, cooldown, backoff, jitter, and stable-run values only from accepted evidence; define deterministic delay calculation and jitter sampling; and design a configuration source/reload boundary in separately scoped milestones.
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
+- Define source discovery and platform identity mapping before implementing explicit-source capture or durable source persistence.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
 
