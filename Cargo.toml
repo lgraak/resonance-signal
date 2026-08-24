@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/resonance-core",
+    "crates/resonance-api",
+    "crates/resonance-agent",
+]
