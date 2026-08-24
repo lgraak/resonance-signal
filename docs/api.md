@@ -166,6 +166,8 @@ The agent-internal recovery policy represents typed intent generations, stable r
 
 These policy types remain private to `resonance-agent` and do not change `resonance-api`. The current `CaptureSupervisor` does not invoke or enforce the policy, and the evaluator cannot create or stop owners, sleep, inspect hardware, watch endpoints, or mutate state. Automatic reconnect, retry/backoff mechanisms, endpoint watching, default-device following, and replacement creation remain unimplemented.
 
+ADR 0009 also keeps future attempt identities, automatic-recovery budgets, bounded retry history, cooldown/backoff state, exhaustion, reset rules, and policy-configuration identity private to `resonance-agent`. Those fields are design-only and are not present in the current supervisor. They are not consumer telemetry and do not add an API request, event, or status contract.
+
 These agent-only policy decisions do not change `resonance-core` or `resonance-api`. Consumers observe ordered lifecycle events, platform-neutral error categories and scopes, retry hints, end reasons, and independent stream identities. They do not parse policy, attempt counts, logs, console output, `Display` text, or `ProviderError::message`. Every later capture run still requires a new `StreamId`, frame index zero, and timestamp zero; recovery cannot be hidden as continuation.
 
 On Windows, a ten-second evidence run is:

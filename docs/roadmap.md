@@ -122,9 +122,20 @@
 - Added hardware-independent tests for every ADR 0008 outcome row, precedence rule, evidence gap, guarded permission, and the decision-versus-action boundary.
 - Kept the policy disconnected from `CaptureSupervisor`; reconnect, retry execution, timers, owner replacement, endpoint watching, default-device following, and service behavior remain unimplemented.
 
+## Milestone 6F: Retry state and recovery policy configuration design
+
+- Defined each owner-creation call as one attempt and fixed the increment point immediately before factory invocation, so construction, startup, and runtime failures share one attempt identity and cannot escape accounting.
+- Separated the all-attempt audit sequence from the automatic-recovery budget, and bound both to one explicit capture-intent generation.
+- Assigned mutable last-failure evidence, bounded retry history, recovery episodes, cooldown, exhaustion, and state revision to `CaptureSupervisor`; `RecoveryPolicy` evaluates immutable state and configuration snapshots.
+- Required a new explicit intent or separately evidenced stable run to reset recovery state; a successful construction, `start`, or `Started` event alone cannot erase a flapping failure chain.
+- Defined cooldown as supervisor-owned monotonic eligibility state and kept deterministic delay/backoff calculation, jitter inputs, scheduling, and expiration evidence separate from policy side effects.
+- Required one-shot authorization bound to intent generation, recovery episode, state revision, and prior attempt identity, with explicit stop, no-overlap ownership, budget limits, typed failure classification, and fail-closed evidence preventing recovery storms.
+- Deferred every numeric limit and timing value, configuration source, persistence rule, timer, watcher, reconnect, and replacement owner.
+
 ## Later milestones
 
-- Define and validate concrete bounded retry/backoff values and supervisor-owned mutable retry state without endpoint watchers or replacement capture unless separately approved.
+- Implement agent-internal retry configuration and supervisor-owned mutable retry-state representation with hardware-independent transition tests, without timers, endpoint watchers, reconnect, or replacement capture unless separately approved.
+- Select and validate concrete retry/backoff values only from operational evidence in a separately scoped milestone.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
