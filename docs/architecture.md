@@ -31,7 +31,7 @@ Owns the consumer-facing semantic contract: source selection, subscriptions, str
 
 ### `resonance-agent`
 
-Provides the executable entry point, capture-format enforcement, and provider lifecycle orchestration. Its Windows-only playback-loopback prototype uses `wasapi` 0.24.0 behind a hardware-independent packet-to-frame seam. Official `pipewire-rs` bindings remain the selected but unimplemented Linux direction.
+Owns platform capture, capture-format enforcement, and provider lifecycle orchestration. Its production Windows playback-loopback boundary uses `wasapi` 0.24.0 behind a hardware-independent packet-to-frame seam. The executable is a bounded diagnostic client of that boundary. Official `pipewire-rs` bindings remain the selected but unimplemented Linux direction.
 
 Dependency direction is one way:
 
@@ -68,11 +68,11 @@ Platform-provided conversion is acceptable only when it yields a valid mono or s
 
 Interruption, restart, reconfiguration, timestamp discontinuity, or format change ends the stream. A resumed source receives a new stream ID, frame index zero, and a new monotonic timeline. This preserves the continuity rules already enforced by `WindowScheduler`; no backend-specific timing or identity type enters `resonance-core`.
 
-Backend evaluation selected platform-specific safe wrappers that retain native evidence: `wasapi-rs` 0.24.0 for Windows and `pipewire-rs` 0.10.1 for Linux. A third-party cross-platform capture abstraction is not selected because the evaluated generic surface loses timing-validity or provenance needed by the uninterrupted-stream contract. The Windows dependency and bounded playback-loopback prototype are now implemented; Linux capture remains deferred.
+Backend evaluation selected platform-specific safe wrappers that retain native evidence: `wasapi-rs` 0.24.0 for Windows and `pipewire-rs` 0.10.1 for Linux. A third-party cross-platform capture abstraction is not selected because the evaluated generic surface loses timing-validity or provenance needed by the uninterrupted-stream contract. The Windows playback-loopback capture boundary is productionized; Linux capture remains deferred.
 
 The Windows adapter retains WASAPI device position, QPC timestamp, packet flags, endpoint identity, and endpoint/session notifications before mapping them to provider lifecycle. The future Linux adapter will retain negotiated SPA format, target properties, stream and registry events, buffer metadata, and graph timing. Only bounded samples and platform-neutral accepted format, source, stream, lifecycle, and diagnostic semantics cross the adapter boundary.
 
-### Windows prototype data path
+### Windows production capture data path
 
 ```text
 default console rendering endpoint
@@ -91,13 +91,17 @@ packet validation + f32 conversion + AudioFrame
 StreamEvent processing callback
 ```
 
-The WASAPI event thread owns COM and all non-`Send` endpoint/client objects. Its repeated work is limited to waiting, querying packet size, copying into an available fixed buffer, recording timing/flags, and attempting a non-blocking handoff. Conversion, finite-value validation, `AudioFrame` allocation, provider event construction, evidence aggregation, and console output run on the ordinary processing thread. Exhausting either fixed buffer ownership or channel capacity is an explicit stream-ending error.
+The WASAPI event thread owns COM and all non-`Send` endpoint/client objects. Its repeated work is limited to waiting, querying packet size, copying into an available fixed buffer, recording timing/flags, and attempting a non-blocking handoff. Conversion, finite-value validation, `AudioFrame` allocation, provider event construction, report aggregation, and consumer callbacks run on the ordinary processing thread. The CLI prints only the events and report it receives; console output is not part of capture ownership.
 
-The prototype accepts the endpoint mix sample rate and requests float output. Native mono stays mono; all other non-zero native layouts are offered to the Windows audio engine as explicit front-left/front-right stereo. This is platform conversion, not silent first-two-channel extraction or a Resonance Signal downmix. If WASAPI cannot initialize that representation, no stream starts.
+The pool and handoff each have four slots. This is an internal bound supported by real-device evidence: observed packets represented approximately 10 ms while callback work remained sub-millisecond. Every buffer is preallocated to the maximum frame count reported by the initialized WASAPI client, so packet size does not become a configuration knob. If either fixed-buffer ownership or channel capacity is exhausted, the stream ends with an explicit `ResourceExhausted` error before any packet can be silently discarded.
+
+The adapter accepts the endpoint mix sample rate and requests float output. Native mono stays mono; all other non-zero native layouts are offered to the Windows audio engine as explicit front-left/front-right stereo. This is platform conversion, not silent first-two-channel extraction or a Resonance Signal downmix. If WASAPI cannot initialize that representation, no stream starts.
 
 WASAPI device position validates packet adjacency. QPC timestamp validity and monotonicity are also enforced and its deltas are retained as evidence. Provider timestamps are normalized sample time: frame index zero and timestamp zero at the first accepted packet, then `frame_index * 1_000_000_000 / sample_rate`. This avoids importing the absolute Windows clock while keeping frame timestamps compatible with sample-contiguous scheduling.
 
-Endpoint and session callbacks perform only an atomic first-reason update. Default playback replacement, format change, endpoint invalidation, device removal, session disconnect, later packet discontinuity, or timing failure stops the current WASAPI stream and emits an explicit provider error/end event. Reconnect is intentionally absent; invoking a later capture run establishes a new stream identity and timeline.
+Endpoint and session callbacks perform only an atomic first-reason update. Default playback replacement, format change, endpoint invalidation, device removal, session disconnect, later packet discontinuity, or timing failure stops the current WASAPI stream and emits an explicit provider error/end event. A normal owner stop is requested through a cloneable `CaptureStopToken` and maps to `ProviderShutdown`. Duration belongs only to the diagnostic runner and maps to `ConsumerCancelled`.
+
+The adapter does not reconnect or continuously follow the default device. Invoking a later capture run is the explicit restart operation and establishes a new stream identity, frame index zero, and timestamp zero. This keeps reconnection policy with the future owner and prevents retry loops from being hidden inside platform capture.
 
 ## Contract flow
 
@@ -140,7 +144,7 @@ Future products remain separate branches from the waveform input. A later `Spect
 
 ## Current constraints
 
-- The Windows default-playback loopback evidence prototype is implemented in `resonance-agent`; it is not a production reconnecting capture service.
+- The Windows default-playback loopback capture boundary is productionized in `resonance-agent`; no reconnecting service or service installation exists.
 - Windows microphone capture and all Linux capture remain unimplemented.
 - Supported future capture output is limited to mono and two-channel stereo; wider, spatial, and object-based formats are rejected unless the platform supplies a valid mono/stereo representation.
 - Custom downmixing and silent first-two-channel extraction are prohibited.
@@ -151,4 +155,4 @@ Future products remain separate branches from the waveform input. A later `Spect
 - No consumer or visualization code belongs in this repository.
 - End-to-end capture latency is not measured because cross-clock correlation is deferred.
 
-See [ADR 0001](decisions/0001-audio-data-contract.md) for the audio contract, [ADR 0002](decisions/0002-bounded-window-scheduling.md) for scheduling and buffering decisions, [ADR 0003](decisions/0003-stereo-first-capture-boundary.md) for capture scope and enforcement, and [ADR 0004](decisions/0004-capture-backend-selection.md) for backend evidence and implementation direction.
+See [ADR 0001](decisions/0001-audio-data-contract.md) for the audio contract, [ADR 0002](decisions/0002-bounded-window-scheduling.md) for scheduling and buffering decisions, [ADR 0003](decisions/0003-stereo-first-capture-boundary.md) for capture scope and enforcement, [ADR 0004](decisions/0004-capture-backend-selection.md) for backend evidence and implementation direction, and [ADR 0005](decisions/0005-windows-capture-lifecycle-and-buffering.md) for the production Windows lifecycle and bounded handoff.

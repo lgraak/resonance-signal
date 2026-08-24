@@ -21,7 +21,7 @@ pub struct CaptureFormat {
 
 impl CaptureFormat {
     /// Creates the mono or canonical front-left/front-right format emitted by
-    /// the Windows prototype.
+    /// the Windows capture boundary.
     pub fn mono_or_stereo(sample_rate_hz: u32, channel_count: u16) -> Result<Self, CaptureError> {
         let sample_rate = SampleRate::new(sample_rate_hz).map_err(CaptureError::InvalidFormat)?;
         let channels = match channel_count {

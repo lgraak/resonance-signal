@@ -1,8 +1,8 @@
-//! Executable entry point for the bounded Resonance Signal capture prototype.
+//! Diagnostic executable for the production Resonance Signal capture boundary.
 
 #[cfg(windows)]
 fn main() {
-    use resonance_agent::windows::{run_default_playback_loopback, PrototypeConfig};
+    use resonance_agent::windows::run_default_playback_loopback_for;
 
     let duration = match parse_duration(std::env::args().skip(1)) {
         Ok(Some(duration)) => duration,
@@ -13,11 +13,14 @@ fn main() {
         }
     };
 
-    let config = PrototypeConfig::new(duration);
-    match run_default_playback_loopback(config, print_lifecycle_event) {
-        Ok(evidence) => println!("{evidence}"),
+    match run_default_playback_loopback_for(duration, print_lifecycle_event) {
+        Ok(report) => println!("{report}"),
         Err(error) => {
-            eprintln!("Windows playback-loopback prototype failed: {error}");
+            eprintln!(
+                "Windows playback-loopback capture failed: kind={:?}, retry={:?}, message={error}",
+                error.kind(),
+                error.retry_hint()
+            );
             std::process::exit(1);
         }
     }
@@ -83,4 +86,47 @@ fn parse_duration(
 fn main() {
     eprintln!("resonance-agent playback loopback is currently available only on Windows");
     std::process::exit(1);
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn args(values: &[&str]) -> impl Iterator<Item = String> {
+        values
+            .iter()
+            .map(|value| (*value).to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn duration_defaults_to_ten_seconds() {
+        assert_eq!(parse_duration(args(&[])), Ok(Some(Duration::from_secs(10))));
+    }
+
+    #[test]
+    fn duration_accepts_only_the_documented_range_and_shape() {
+        assert_eq!(
+            parse_duration(args(&["--duration-seconds", "1"])),
+            Ok(Some(Duration::from_secs(1)))
+        );
+        assert_eq!(
+            parse_duration(args(&["--duration-seconds", "3600"])),
+            Ok(Some(Duration::from_secs(3600)))
+        );
+        assert!(parse_duration(args(&["--duration-seconds", "0"]))
+            .unwrap_err()
+            .contains("between 1 and 3600"));
+        assert!(parse_duration(args(&["--duration-seconds", "3601"]))
+            .unwrap_err()
+            .contains("between 1 and 3600"));
+        assert!(parse_duration(args(&["--unknown"]))
+            .unwrap_err()
+            .contains("unknown argument"));
+        assert!(parse_duration(args(&["--duration-seconds", "10", "extra"]))
+            .unwrap_err()
+            .contains("unexpected arguments"));
+    }
 }

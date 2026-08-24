@@ -6,7 +6,7 @@ The provider is the product. Consumers are clients, and visualization is outside
 
 ## Status
 
-The foundation, audio-data-contract, basic signal-processing, bounded-window-scheduling, stereo-first capture-requirements, capture-backend-selection, and Windows playback-loopback prototype milestones are complete. The workspace defines provider-independent waveform and derived signal frames, a transport-neutral multi-source contract, bounded analysis cadence with explicit discontinuity handling, zero-copy waveform subwindows, RMS and peak levels, explicit peak normalization, and a Windows-only evidence-gathering adapter in `resonance-agent`. The prototype uses `wasapi` 0.24.0 to turn the default Windows playback endpoint into bounded, validated `AudioFrame` and `StreamEvent` output. Production capture orchestration, microphone and Linux capture, FFT processing, device discovery, serialization, and service transports are not implemented yet.
+The foundation, audio-data-contract, basic signal-processing, bounded-window-scheduling, stereo-first capture-requirements, capture-backend-selection, Windows playback-loopback prototype, real-device validation, and Windows capture-boundary productionization milestones are complete. The workspace defines provider-independent waveform and derived signal frames, a transport-neutral multi-source contract, bounded analysis cadence with explicit discontinuity handling, zero-copy waveform subwindows, RMS and peak levels, explicit peak normalization, and a production Windows playback-capture boundary in `resonance-agent`. The Windows adapter uses `wasapi` 0.24.0 to turn the default playback endpoint into bounded, validated `AudioFrame` and `StreamEvent` output with explicit lifecycle and overload behavior. Microphone and Linux capture, automatic reconnect, FFT processing, device discovery, serialization, service installation, and service transports are not implemented.
 
 Supported capture products are mono and two-channel stereo. Surround, spatial, and object-based audio are outside the product scope. A future capture backend may accept a multichannel source only when the platform can provide a valid mono or stereo representation; it must never silently keep the first two channels or invent a downmix.
 
@@ -35,7 +35,7 @@ The workspace is divided into three crates:
 
 - `resonance-core`: core data structures, shared types, and provider-independent logic.
 - `resonance-api`: consumer-facing semantic contracts without a selected transport or serialization format.
-- `resonance-agent`: executable entry point, the Windows playback-loopback prototype, and future platform capture orchestration.
+- `resonance-agent`: platform capture ownership, the production Windows playback-loopback adapter, provider-event orchestration, and the diagnostic executable.
 
 See [Architecture](docs/architecture.md), [API](docs/api.md), and [Roadmap](docs/roadmap.md) for the current project boundaries.
 
@@ -46,8 +46,17 @@ Use stable Rust. From the repository root:
 ```text
 cargo fmt --all --check
 cargo check --workspace --all-targets
-cargo build --workspace
+cargo test --workspace
+cargo doc --workspace --no-deps
 ```
+
+On Windows, the diagnostic executable performs a bounded ten-second run by default:
+
+```text
+cargo run -p resonance-agent -- --duration-seconds 10
+```
+
+Duration is diagnostic configuration. Production owners use the Windows capture API with a `CaptureStopToken`; buffer-pool depth, maximum packet allocation, and WASAPI event-wait cadence remain internal implementation details.
 
 ## License
 

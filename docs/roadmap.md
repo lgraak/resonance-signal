@@ -53,10 +53,26 @@
 - Made interruption, format change, device invalidation, timing discontinuity, and handoff exhaustion explicit stream boundaries; automatic reconnect remains deferred.
 - Added hardware-independent conversion, frame-generation, unsupported-format, non-finite-value, and discontinuity tests plus runtime evidence reporting.
 
+## Milestone 5B: Windows real-device validation
+
+- Validated default-playback loopback against the WH-1000XM5 endpoint at 96 kHz, two-channel interleaved `f32`.
+- Observed 960-frame packets representing approximately 10 ms of audio, approximately 10 ms QPC deltas, and sub-millisecond callback work.
+- Confirmed that repeated capture runs create new stream identities and restart the stream-relative frame index and timestamp at zero.
+- Classified the consistently observed first-packet discontinuity flag as startup history; later discontinuities remain stream-ending failures.
+
+## Milestone 5C: Production Windows capture boundary
+
+- Replaced duration-owned prototype orchestration with an explicit production stop token; retained duration only in the bounded diagnostic runner.
+- Kept a four-slot, maximum-packet-sized preallocated pool and matching non-blocking handoff as internal implementation details rather than public tuning knobs.
+- Formalized normal stop, source replacement, format change, endpoint loss, interruption, discontinuity, bounded overload, and internal-failure mappings to existing provider events.
+- Separated machine-actionable terminal categories and retry hints from human diagnostics and console evidence output.
+- Added hardware-independent tests for CLI validation, lifecycle/error mapping, bounded handoff delivery, explicit overload, and stream restart identity/timeline behavior.
+- Preserved explicit owner-controlled restart; automatic reconnect remains deferred.
+
 ## Later milestones
 
-- Review real-device Windows prototype evidence and define the production capture lifecycle, reconnection, buffer sizing, and diagnostic policy.
-- Add microphone capture and the Linux PipeWire adapter only after that evidence is reviewed.
+- Define and validate the first long-running capture owner, including reconnect policy and controlled endpoint-replacement acceptance, without selecting transport prematurely.
+- Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
 

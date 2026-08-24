@@ -1,4 +1,4 @@
-//! Bounded Windows playback-loopback prototype using `wasapi` 0.24.
+//! Production Windows playback-loopback capture using `wasapi` 0.24.
 
 use std::error::Error;
 use std::fmt;
@@ -19,42 +19,49 @@ use wasapi::{
 
 use crate::capture::{AudioFrameBuilder, CaptureError, CaptureFormat, CapturePacket, PacketFlags};
 
-const DEFAULT_HANDOFF_CAPACITY: usize = 4;
+// Real-device validation showed one 10 ms packet at a time. Four slots keep
+// callback work decoupled from ordinary processing without making buffering a
+// public tuning surface. Exhaustion ends the stream instead of dropping data.
+const HANDOFF_CAPACITY: usize = 4;
 const EVENT_WAIT_TIMEOUT_MS: u32 = 100;
 const END_NONE: u8 = 0;
 const END_SOURCE_RECONFIGURED: u8 = 1;
 const END_SOURCE_UNAVAILABLE: u8 = 2;
 const END_INTERRUPTED: u8 = 3;
+const AUDCLNT_E_DEVICE_INVALIDATED: i32 = 0x8889_0004_u32 as i32;
 
 static STREAM_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
-/// Settings for one evidence-gathering capture run.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PrototypeConfig {
-    duration: Duration,
-    handoff_capacity: usize,
+/// A cloneable request for a running capture operation to stop normally.
+///
+/// This is the production lifecycle control. The duration-based command-line
+/// mode is retained only as a bounded diagnostic and validation harness.
+#[derive(Clone, Debug, Default)]
+pub struct CaptureStopToken(Arc<AtomicBool>);
+
+impl CaptureStopToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn request_stop(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    fn is_stop_requested(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
 }
 
-impl PrototypeConfig {
-    pub fn new(duration: Duration) -> Self {
-        Self {
-            duration,
-            handoff_capacity: DEFAULT_HANDOFF_CAPACITY,
-        }
-    }
-
-    pub fn with_handoff_capacity(mut self, capacity: usize) -> Result<Self, PrototypeError> {
-        if capacity == 0 {
-            return Err(PrototypeError::InvalidHandoffCapacity);
-        }
-        self.handoff_capacity = capacity;
-        Ok(self)
-    }
+#[derive(Clone, Debug)]
+enum RunLimit {
+    UntilStopped,
+    Duration(Duration),
 }
 
 /// Measurements gathered without adding work to the WASAPI event thread.
 #[derive(Clone, Debug)]
-pub struct PrototypeEvidence {
+pub struct CaptureReport {
     pub endpoint_name: String,
     pub native_sample_rate_hz: u32,
     pub native_channel_count: u16,
@@ -72,10 +79,12 @@ pub struct PrototypeEvidence {
     pub minimum_qpc_delta: Option<Duration>,
     pub maximum_qpc_delta: Option<Duration>,
     pub initial_discontinuity_observed: bool,
-    pub end: PrototypeEnd,
+    pub end: CaptureEnd,
+    /// Non-stable, human-readable detail for a terminal condition, when any.
+    pub end_diagnostic: Option<String>,
 }
 
-impl fmt::Display for PrototypeEvidence {
+impl fmt::Display for CaptureReport {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(formatter, "Windows WASAPI playback-loopback evidence")?;
         writeln!(formatter, "  endpoint: {}", self.endpoint_name)?;
@@ -125,66 +134,92 @@ impl fmt::Display for PrototypeEvidence {
             formatter,
             "  observed latency: not measured (clock correlation deferred)"
         )?;
-        write!(formatter, "  stream end: {:?}", self.end)
+        write!(formatter, "  stream end: {:?}", self.end)?;
+        if let Some(diagnostic) = &self.end_diagnostic {
+            write!(formatter, " ({diagnostic})")?;
+        }
+        Ok(())
     }
 }
 
-/// Why the capture owner stopped. Every non-duration reason is a stream boundary.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum PrototypeEnd {
+/// Machine-actionable reason the capture owner stopped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CaptureEnd {
+    StopRequested,
     DurationElapsed,
     SourceReconfigured,
     SourceUnavailable,
     Interrupted,
-    DataDiscontinuity(String),
+    DataDiscontinuity,
     BoundedHandoffExhausted,
-    Failed(String),
+    Failed,
 }
 
-/// Runs one bounded default-playback loopback stream and emits the existing
-/// provider contract to `on_event` on the non-real-time processing thread.
+/// Captures the default playback endpoint until `stop` is requested or a
+/// stream boundary occurs.
+///
+/// Provider events are emitted on an ordinary processing thread. The WASAPI
+/// callback never invokes `on_event`, waits for processing, or allocates.
 pub fn run_default_playback_loopback(
-    config: PrototypeConfig,
+    stop: CaptureStopToken,
     mut on_event: impl FnMut(StreamEvent),
-) -> Result<PrototypeEvidence, PrototypeError> {
-    if config.duration.is_zero() {
-        return Err(PrototypeError::InvalidDuration);
-    }
-    if config.handoff_capacity == 0 {
-        return Err(PrototypeError::InvalidHandoffCapacity);
-    }
+) -> Result<CaptureReport, CaptureRunError> {
+    run_capture(RunLimit::UntilStopped, stop, &mut on_event)
+}
 
-    let (capture_tx, capture_rx) = mpsc::sync_channel(config.handoff_capacity);
-    let stop_requested = Arc::new(AtomicBool::new(false));
-    let capture_stop = stop_requested.clone();
+/// Runs the production capture boundary for a bounded diagnostic interval.
+///
+/// Duration is validation/CLI configuration, not a capture-backend tuning
+/// parameter. Production owners should use [`run_default_playback_loopback`]
+/// with a [`CaptureStopToken`].
+pub fn run_default_playback_loopback_for(
+    duration: Duration,
+    mut on_event: impl FnMut(StreamEvent),
+) -> Result<CaptureReport, CaptureRunError> {
+    if duration.is_zero() {
+        return Err(CaptureRunError::InvalidDuration);
+    }
+    run_capture(
+        RunLimit::Duration(duration),
+        CaptureStopToken::new(),
+        &mut on_event,
+    )
+}
+
+fn run_capture(
+    limit: RunLimit,
+    stop: CaptureStopToken,
+    on_event: &mut impl FnMut(StreamEvent),
+) -> Result<CaptureReport, CaptureRunError> {
+    const CAPACITY: usize = HANDOFF_CAPACITY;
+
+    let (capture_tx, capture_rx) = mpsc::sync_channel(CAPACITY);
+    let capture_stop = stop.clone();
     let handle = thread::Builder::new()
         .name("resonance-wasapi-loopback".to_string())
-        .spawn(move || capture_thread(config, capture_stop, capture_tx))
-        .map_err(PrototypeError::Spawn)?;
+        .spawn(move || capture_thread(limit, capture_stop, capture_tx))
+        .map_err(CaptureRunError::Spawn)?;
 
-    let result = process_capture(capture_rx, stop_requested, &mut on_event);
-    let join_result = handle
+    let result = process_capture(capture_rx, stop, on_event);
+    handle
         .join()
-        .map_err(|_| PrototypeError::CaptureThreadPanicked)?;
-    if let Err(error) = join_result {
-        return Err(PrototypeError::Wasapi(error));
-    }
+        .map_err(|_| CaptureRunError::CaptureThreadPanicked)?;
     result
 }
 
 fn process_capture(
     capture_rx: Receiver<CaptureMessage>,
-    stop_requested: Arc<AtomicBool>,
+    stop: CaptureStopToken,
     on_event: &mut impl FnMut(StreamEvent),
-) -> Result<PrototypeEvidence, PrototypeError> {
+) -> Result<CaptureReport, CaptureRunError> {
     let started = match capture_rx
         .recv()
-        .map_err(|_| PrototypeError::CaptureChannelClosed)?
+        .map_err(|_| CaptureRunError::CaptureChannelClosed)?
     {
         CaptureMessage::Started(started) => started,
-        CaptureMessage::Failed(message) => return Err(PrototypeError::Wasapi(message)),
+        CaptureMessage::Failed(failure) => return Err(failure.into()),
         CaptureMessage::Packet(_) | CaptureMessage::Ended(_) => {
-            return Err(PrototypeError::Protocol("capture did not start first"))
+            return Err(CaptureRunError::Protocol("capture did not start first"))
         }
     };
 
@@ -193,9 +228,9 @@ fn process_capture(
         std::process::id(),
         STREAM_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ))
-    .map_err(|error| PrototypeError::Contract(error.to_string()))?;
+    .map_err(|error| CaptureRunError::Contract(error.to_string()))?;
     let source_id = SourceId::new("default-playback")
-        .map_err(|error| PrototypeError::Contract(error.to_string()))?;
+        .map_err(|error| CaptureRunError::Contract(error.to_string()))?;
     let descriptor = StreamDescriptor::new(
         stream_id.clone(),
         source_id.clone(),
@@ -205,7 +240,7 @@ fn process_capture(
     );
     on_event(StreamEvent::Started(descriptor));
 
-    let mut evidence = PrototypeEvidence {
+    let mut evidence = CaptureReport {
         endpoint_name: started.endpoint_name,
         native_sample_rate_hz: started.native_sample_rate_hz,
         native_channel_count: started.native_channel_count,
@@ -223,22 +258,23 @@ fn process_capture(
         minimum_qpc_delta: None,
         maximum_qpc_delta: None,
         initial_discontinuity_observed: false,
-        end: PrototypeEnd::Failed("capture channel closed without an end event".to_string()),
+        end: CaptureEnd::Failed,
+        end_diagnostic: Some("capture channel closed without an end event".to_string()),
     };
     let mut builder = AudioFrameBuilder::new(started.format);
 
     loop {
         let message = capture_rx
             .recv()
-            .map_err(|_| PrototypeError::CaptureChannelClosed)?;
+            .map_err(|_| CaptureRunError::CaptureChannelClosed)?;
         match message {
             CaptureMessage::Packet(packet) => {
                 update_packet_evidence(&mut evidence, &packet)?;
                 let built = builder.push(&packet);
                 let recycle_result = started.recycle_tx.try_send(packet.into_buffer());
                 if recycle_result.is_err() {
-                    stop_requested.store(true, Ordering::Release);
-                    return Err(PrototypeError::Protocol("capture buffer recycle failed"));
+                    stop.request_stop();
+                    return Err(CaptureRunError::Protocol("capture buffer recycle failed"));
                 }
 
                 match built {
@@ -252,18 +288,18 @@ fn process_capture(
                         evidence.audio_frame_count = evidence
                             .audio_frame_count
                             .checked_add(1)
-                            .ok_or(PrototypeError::EvidenceOverflow)?;
+                            .ok_or(CaptureRunError::EvidenceOverflow)?;
                         evidence.source_frame_count = evidence
                             .source_frame_count
                             .checked_add(u64::from(built.frame().window().frame_count()))
-                            .ok_or(PrototypeError::EvidenceOverflow)?;
+                            .ok_or(CaptureRunError::EvidenceOverflow)?;
                         on_event(StreamEvent::Data(SignalPacket::new(
                             stream_id.clone(),
                             SignalPayload::Waveform(built.into_frame()),
                         )));
                     }
                     Err(error) => {
-                        stop_requested.store(true, Ordering::Release);
+                        stop.request_stop();
                         let message = error.to_string();
                         on_event(StreamEvent::Error(ProviderError::new(
                             ErrorKind::StreamInterrupted,
@@ -275,38 +311,47 @@ fn process_capture(
                             stream_id,
                             reason: StreamEndReason::Failed,
                         });
-                        evidence.end = PrototypeEnd::DataDiscontinuity(message);
+                        evidence.end = CaptureEnd::DataDiscontinuity;
+                        evidence.end_diagnostic = Some(message);
                         drain_until_end(&capture_rx);
                         return Ok(evidence);
                     }
                 }
             }
-            CaptureMessage::Ended(end) => {
-                evidence.end = end.clone();
-                let (error, reason) = contract_end(&end, &source_id, &stream_id);
+            CaptureMessage::Ended(termination) => {
+                evidence.end = termination.end;
+                evidence.end_diagnostic = termination.diagnostic;
+                let (error, reason) = contract_end(
+                    evidence.end,
+                    evidence.end_diagnostic.as_deref(),
+                    &source_id,
+                    &stream_id,
+                );
                 if let Some(error) = error {
                     on_event(StreamEvent::Error(error));
                 }
                 on_event(StreamEvent::Ended { stream_id, reason });
                 return Ok(evidence);
             }
-            CaptureMessage::Failed(message) => {
+            CaptureMessage::Failed(failure) => {
+                let message = failure.message;
                 on_event(StreamEvent::Error(ProviderError::new(
-                    ErrorKind::Internal,
+                    failure.kind,
                     ErrorScope::Stream(stream_id.clone()),
-                    RetryHint::RetryLater,
+                    failure.retry_hint,
                     message.clone(),
                 )));
                 on_event(StreamEvent::Ended {
                     stream_id,
                     reason: StreamEndReason::Failed,
                 });
-                evidence.end = PrototypeEnd::Failed(message);
+                evidence.end = CaptureEnd::Failed;
+                evidence.end_diagnostic = Some(message);
                 return Ok(evidence);
             }
             CaptureMessage::Started(_) => {
-                stop_requested.store(true, Ordering::Release);
-                return Err(PrototypeError::Protocol("capture started more than once"));
+                stop.request_stop();
+                return Err(CaptureRunError::Protocol("capture started more than once"));
             }
         }
     }
@@ -324,54 +369,67 @@ fn drain_until_end(capture_rx: &Receiver<CaptureMessage>) {
 }
 
 fn contract_end(
-    end: &PrototypeEnd,
+    end: CaptureEnd,
+    diagnostic: Option<&str>,
     source_id: &SourceId,
     stream_id: &StreamId,
 ) -> (Option<ProviderError>, StreamEndReason) {
     match end {
-        PrototypeEnd::DurationElapsed => (None, StreamEndReason::ConsumerCancelled),
-        PrototypeEnd::SourceReconfigured => (
+        CaptureEnd::StopRequested => (None, StreamEndReason::ProviderShutdown),
+        CaptureEnd::DurationElapsed => (None, StreamEndReason::ConsumerCancelled),
+        CaptureEnd::SourceReconfigured => (
             Some(ProviderError::new(
                 ErrorKind::StreamInterrupted,
                 ErrorScope::Stream(stream_id.clone()),
                 RetryHint::RetryNow,
-                "default playback device or stream format changed",
+                diagnostic.unwrap_or("default playback device or stream format changed"),
             )),
             StreamEndReason::SourceReconfigured,
         ),
-        PrototypeEnd::SourceUnavailable => (
+        CaptureEnd::SourceUnavailable => (
             Some(ProviderError::new(
                 ErrorKind::SourceUnavailable,
                 ErrorScope::Source(source_id.clone()),
                 RetryHint::WaitForSource,
-                "default playback endpoint became unavailable",
+                diagnostic.unwrap_or("default playback endpoint became unavailable"),
             )),
             StreamEndReason::SourceEnded,
         ),
-        PrototypeEnd::Interrupted => (
+        CaptureEnd::Interrupted => (
             Some(ProviderError::new(
                 ErrorKind::StreamInterrupted,
                 ErrorScope::Stream(stream_id.clone()),
                 RetryHint::RetryLater,
-                "WASAPI audio session was interrupted",
+                diagnostic.unwrap_or("WASAPI audio session was interrupted"),
             )),
             StreamEndReason::Failed,
         ),
-        PrototypeEnd::BoundedHandoffExhausted => (
+        CaptureEnd::BoundedHandoffExhausted => (
             Some(ProviderError::new(
                 ErrorKind::ResourceExhausted,
                 ErrorScope::Stream(stream_id.clone()),
                 RetryHint::RetryLater,
-                "bounded capture handoff exhausted; no audio packet was silently dropped",
+                diagnostic.unwrap_or(
+                    "bounded capture handoff exhausted; no audio packet was silently dropped",
+                ),
             )),
             StreamEndReason::Failed,
         ),
-        PrototypeEnd::DataDiscontinuity(message) | PrototypeEnd::Failed(message) => (
+        CaptureEnd::DataDiscontinuity => (
             Some(ProviderError::new(
                 ErrorKind::StreamInterrupted,
                 ErrorScope::Stream(stream_id.clone()),
                 RetryHint::RetryNow,
-                message.clone(),
+                diagnostic.unwrap_or("capture continuity could not be proven"),
+            )),
+            StreamEndReason::Failed,
+        ),
+        CaptureEnd::Failed => (
+            Some(ProviderError::new(
+                ErrorKind::Internal,
+                ErrorScope::Stream(stream_id.clone()),
+                RetryHint::RetryLater,
+                diagnostic.unwrap_or("Windows capture failed"),
             )),
             StreamEndReason::Failed,
         ),
@@ -379,13 +437,13 @@ fn contract_end(
 }
 
 fn update_packet_evidence(
-    evidence: &mut PrototypeEvidence,
+    evidence: &mut CaptureReport,
     packet: &CapturePacket,
-) -> Result<(), PrototypeError> {
+) -> Result<(), CaptureRunError> {
     evidence.packet_count = evidence
         .packet_count
         .checked_add(1)
-        .ok_or(PrototypeError::EvidenceOverflow)?;
+        .ok_or(CaptureRunError::EvidenceOverflow)?;
     evidence.minimum_packet_frames = Some(
         evidence
             .minimum_packet_frames
@@ -426,45 +484,67 @@ fn update_duration_range(
     }
 }
 
-fn capture_thread(
-    config: PrototypeConfig,
-    stop_requested: Arc<AtomicBool>,
-    capture_tx: SyncSender<CaptureMessage>,
-) -> Result<(), String> {
-    if let Err(error) = capture_thread_inner(config, stop_requested, &capture_tx) {
-        let _ = capture_tx.send(CaptureMessage::Failed(error.clone()));
-        return Err(error);
+fn capture_thread(limit: RunLimit, stop: CaptureStopToken, capture_tx: SyncSender<CaptureMessage>) {
+    if let Err(error) = capture_thread_inner(limit, stop, &capture_tx) {
+        let _ = capture_tx.send(CaptureMessage::Failed(error));
     }
-    Ok(())
 }
 
 fn capture_thread_inner(
-    config: PrototypeConfig,
-    stop_requested: Arc<AtomicBool>,
+    limit: RunLimit,
+    stop: CaptureStopToken,
     capture_tx: &SyncSender<CaptureMessage>,
-) -> Result<(), String> {
-    initialize_mta()
-        .ok()
-        .map_err(|error| format!("failed to initialize COM MTA: {error}"))?;
+) -> Result<(), CaptureFailure> {
+    initialize_mta().ok().map_err(|error| {
+        CaptureFailure::internal(format!("failed to initialize COM MTA: {error}"))
+    })?;
     let _com = ComGuard;
 
-    let enumerator = wasapi::DeviceEnumerator::new().map_err(display_error)?;
+    let enumerator = wasapi::DeviceEnumerator::new().map_err(|error| {
+        CaptureFailure::internal(format!(
+            "failed to create WASAPI device enumerator: {error}"
+        ))
+    })?;
     let device = enumerator
         .get_default_device(&Direction::Render)
-        .map_err(display_error)?;
-    let endpoint_id = device.get_id().map_err(display_error)?;
-    let endpoint_name = device.get_friendlyname().map_err(display_error)?;
-    let mut audio_client = device.get_iaudioclient().map_err(display_error)?;
-    let native_format = audio_client.get_mixformat().map_err(display_error)?;
+        .map_err(|error| {
+            CaptureFailure::source_unavailable(format!(
+                "default playback endpoint is unavailable: {error}"
+            ))
+        })?;
+    let endpoint_id = device.get_id().map_err(|error| {
+        CaptureFailure::source_unavailable(format!(
+            "failed to read default playback endpoint identity: {error}"
+        ))
+    })?;
+    let endpoint_name = device.get_friendlyname().map_err(|error| {
+        CaptureFailure::source_unavailable(format!(
+            "failed to read default playback endpoint name: {error}"
+        ))
+    })?;
+    let mut audio_client = device.get_iaudioclient().map_err(|error| {
+        CaptureFailure::source_unavailable(format!(
+            "failed to open default playback endpoint: {error}"
+        ))
+    })?;
+    let native_format = audio_client.get_mixformat().map_err(|error| {
+        CaptureFailure::unsupported_format(format!(
+            "failed to read default playback endpoint format: {error}"
+        ))
+    })?;
     let native_sample_rate_hz = native_format.get_samplespersec();
     let native_channel_count = native_format.get_nchannels();
     let output_channel_count = match native_channel_count {
-        0 => return Err("default playback endpoint reported zero channels".to_string()),
+        0 => {
+            return Err(CaptureFailure::unsupported_format(
+                "default playback endpoint reported zero channels",
+            ))
+        }
         1 => 1,
         _ => 2,
     };
     let format = CaptureFormat::mono_or_stereo(native_sample_rate_hz, output_channel_count)
-        .map_err(|error| error.to_string())?;
+        .map_err(|error| CaptureFailure::unsupported_format(error.to_string()))?;
     let desired_format = WaveFormat::new(
         32,
         32,
@@ -474,7 +554,11 @@ fn capture_thread_inner(
         None,
     );
 
-    let (default_period_hns, _) = audio_client.get_device_period().map_err(display_error)?;
+    let (default_period_hns, _) = audio_client.get_device_period().map_err(|error| {
+        CaptureFailure::source_unavailable(format!(
+            "failed to query default playback endpoint period: {error}"
+        ))
+    })?;
     audio_client
         .initialize_client(
             &desired_format,
@@ -485,37 +569,54 @@ fn capture_thread_inner(
             },
         )
         .map_err(|error| {
-            format!(
+            CaptureFailure::unsupported_format(format!(
                 "default playback format cannot be converted to supported {} Hz / {} channel f32: {error}",
                 native_sample_rate_hz, output_channel_count
-            )
+            ))
         })?;
-    let event_handle = audio_client.set_get_eventhandle().map_err(display_error)?;
-    let maximum_packet_frames = audio_client.get_buffer_size().map_err(display_error)?;
-    let capture_client = audio_client
-        .get_audiocaptureclient()
-        .map_err(display_error)?;
+    let event_handle = audio_client.set_get_eventhandle().map_err(|error| {
+        CaptureFailure::internal(format!("failed to create WASAPI event handle: {error}"))
+    })?;
+    let maximum_packet_frames = audio_client.get_buffer_size().map_err(|error| {
+        CaptureFailure::internal(format!("failed to query WASAPI buffer size: {error}"))
+    })?;
+    let capture_client = audio_client.get_audiocaptureclient().map_err(|error| {
+        CaptureFailure::internal(format!("failed to create WASAPI capture client: {error}"))
+    })?;
     let bytes_per_frame = format.bytes_per_frame();
     let buffer_bytes = usize::try_from(maximum_packet_frames)
         .ok()
         .and_then(|frames| frames.checked_mul(bytes_per_frame))
-        .ok_or_else(|| "WASAPI buffer size overflowed usize".to_string())?;
+        .ok_or_else(|| CaptureFailure::internal("WASAPI buffer size overflowed usize"))?;
 
     let end_signal = Arc::new(AtomicU8::new(END_NONE));
     let _device_events = register_device_events(&enumerator, &endpoint_id, end_signal.clone())
-        .map_err(display_error)?;
-    let session_control = audio_client
-        .get_audiosessioncontrol()
-        .map_err(display_error)?;
+        .map_err(|error| {
+            CaptureFailure::internal(format!(
+                "failed to register playback endpoint notifications: {error}"
+            ))
+        })?;
+    let session_control = audio_client.get_audiosessioncontrol().map_err(|error| {
+        CaptureFailure::internal(format!("failed to open WASAPI session control: {error}"))
+    })?;
     let _session_events =
-        register_session_events(&session_control, end_signal.clone()).map_err(display_error)?;
+        register_session_events(&session_control, end_signal.clone()).map_err(|error| {
+            CaptureFailure::internal(format!(
+                "failed to register WASAPI session notifications: {error}"
+            ))
+        })?;
 
-    let (recycle_tx, recycle_rx) = mpsc::sync_channel(config.handoff_capacity);
-    for _ in 0..config.handoff_capacity {
-        recycle_tx
-            .try_send(vec![0_u8; buffer_bytes])
-            .map_err(|_| "failed to initialize bounded capture buffer pool".to_string())?;
+    let (recycle_tx, recycle_rx) = mpsc::sync_channel(HANDOFF_CAPACITY);
+    for _ in 0..HANDOFF_CAPACITY {
+        recycle_tx.try_send(vec![0_u8; buffer_bytes]).map_err(|_| {
+            CaptureFailure::internal("failed to initialize bounded capture buffer pool")
+        })?;
     }
+    audio_client.start_stream().map_err(|error| {
+        CaptureFailure::source_unavailable(format!(
+            "default playback endpoint could not start: {error}"
+        ))
+    })?;
     capture_tx
         .send(CaptureMessage::Started(CaptureStarted {
             endpoint_name,
@@ -525,33 +626,37 @@ fn capture_thread_inner(
             format,
             recycle_tx,
         }))
-        .map_err(|_| "processing path closed before stream start".to_string())?;
-
-    audio_client.start_stream().map_err(display_error)?;
-    let deadline = Instant::now()
-        .checked_add(config.duration)
-        .ok_or_else(|| "capture duration exceeds the monotonic clock range".to_string())?;
+        .map_err(|_| CaptureFailure::internal("processing path closed before stream start"))?;
+    let deadline = match limit {
+        RunLimit::UntilStopped => None,
+        RunLimit::Duration(duration) => {
+            Some(Instant::now().checked_add(duration).ok_or_else(|| {
+                CaptureFailure::internal("capture duration exceeds the monotonic clock range")
+            })?)
+        }
+    };
     let mut previous_callback = None;
     let loop_end = capture_loop(
         &capture_client,
         &event_handle,
         bytes_per_frame,
         deadline,
-        &stop_requested,
+        &stop,
         &end_signal,
         &recycle_rx,
         capture_tx,
         &mut previous_callback,
     );
-    let stop_result = audio_client.stop_stream().map_err(display_error);
+    let stop_result = audio_client.stop_stream();
 
-    let end = match (loop_end, stop_result) {
-        (Ok(end), Ok(())) => end,
-        (Err(error), _) | (_, Err(error)) => PrototypeEnd::Failed(error),
+    let termination = match (loop_end, stop_result) {
+        (Ok(end), Ok(())) => CaptureTermination::new(end),
+        (Err(termination), _) => termination,
+        (_, Err(error)) => wasapi_stream_termination("failed to stop WASAPI stream", error),
     };
     capture_tx
-        .send(CaptureMessage::Ended(end))
-        .map_err(|_| "processing path closed before stream end".to_string())
+        .send(CaptureMessage::Ended(termination))
+        .map_err(|_| CaptureFailure::internal("processing path closed before stream end"))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -559,31 +664,31 @@ fn capture_loop(
     capture_client: &wasapi::AudioCaptureClient,
     event_handle: &wasapi::Handle,
     bytes_per_frame: usize,
-    deadline: Instant,
-    stop_requested: &AtomicBool,
+    deadline: Option<Instant>,
+    stop: &CaptureStopToken,
     end_signal: &AtomicU8,
     recycle_rx: &Receiver<Vec<u8>>,
     capture_tx: &SyncSender<CaptureMessage>,
     previous_callback: &mut Option<Instant>,
-) -> Result<PrototypeEnd, String> {
+) -> Result<CaptureEnd, CaptureTermination> {
     loop {
-        if stop_requested.load(Ordering::Acquire) {
-            return Ok(PrototypeEnd::Interrupted);
+        if stop.is_stop_requested() {
+            return Ok(CaptureEnd::StopRequested);
         }
         match end_signal.load(Ordering::Acquire) {
             END_NONE => {}
-            END_SOURCE_RECONFIGURED => return Ok(PrototypeEnd::SourceReconfigured),
-            END_SOURCE_UNAVAILABLE => return Ok(PrototypeEnd::SourceUnavailable),
-            _ => return Ok(PrototypeEnd::Interrupted),
+            END_SOURCE_RECONFIGURED => return Ok(CaptureEnd::SourceReconfigured),
+            END_SOURCE_UNAVAILABLE => return Ok(CaptureEnd::SourceUnavailable),
+            _ => return Ok(CaptureEnd::Interrupted),
         }
-        if Instant::now() >= deadline {
-            return Ok(PrototypeEnd::DurationElapsed);
+        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+            return Ok(CaptureEnd::DurationElapsed);
         }
 
         match event_handle.wait_for_event(EVENT_WAIT_TIMEOUT_MS) {
             Ok(()) => {}
             Err(wasapi::WasapiError::EventTimeout) => continue,
-            Err(error) => return Err(error.to_string()),
+            Err(error) => return Err(wasapi_stream_termination("WASAPI event wait failed", error)),
         }
 
         let callback_started = Instant::now();
@@ -594,7 +699,9 @@ fn capture_loop(
         loop {
             let packet_frames = capture_client
                 .get_next_packet_size()
-                .map_err(display_error)?
+                .map_err(|error| {
+                    wasapi_stream_termination("failed to query the next WASAPI packet", error)
+                })?
                 .unwrap_or(0);
             if packet_frames == 0 {
                 break;
@@ -603,30 +710,39 @@ fn capture_loop(
             let callback_work_started = Instant::now();
             let mut buffer = match recycle_rx.try_recv() {
                 Ok(buffer) => buffer,
-                Err(TryRecvError::Empty) => return Ok(PrototypeEnd::BoundedHandoffExhausted),
+                Err(TryRecvError::Empty) => return Ok(CaptureEnd::BoundedHandoffExhausted),
                 Err(TryRecvError::Disconnected) => {
-                    return Err("capture buffer recycle channel closed".to_string())
+                    return Err(CaptureTermination::failed(
+                        "capture buffer recycle channel closed".to_string(),
+                    ))
                 }
             };
             let expected_bytes = usize::try_from(packet_frames)
                 .ok()
                 .and_then(|frames| frames.checked_mul(bytes_per_frame))
-                .ok_or_else(|| "WASAPI packet size overflowed usize".to_string())?;
+                .ok_or_else(|| {
+                    CaptureTermination::failed("WASAPI packet size overflowed usize".to_string())
+                })?;
             if expected_bytes > buffer.len() {
-                return Err(format!(
+                return Err(CaptureTermination::failed(format!(
                     "WASAPI packet requires {expected_bytes} bytes but the bounded buffer holds {}",
                     buffer.len()
-                ));
+                )));
             }
 
-            let (actual_frames, info) = capture_client
-                .read_from_device(&mut buffer)
-                .map_err(display_error)?;
+            let (actual_frames, info) =
+                capture_client
+                    .read_from_device(&mut buffer)
+                    .map_err(|error| {
+                        wasapi_stream_termination("failed to read a WASAPI packet", error)
+                    })?;
             let callback_duration = callback_work_started.elapsed();
             let byte_len = usize::try_from(actual_frames)
                 .ok()
                 .and_then(|frames| frames.checked_mul(bytes_per_frame))
-                .ok_or_else(|| "captured packet size overflowed usize".to_string())?;
+                .ok_or_else(|| {
+                    CaptureTermination::failed("captured packet size overflowed usize".to_string())
+                })?;
             let packet = CapturePacket::new(
                 buffer,
                 byte_len,
@@ -641,14 +757,21 @@ fn capture_loop(
                 callback_interval,
                 callback_duration,
             )
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| {
+                CaptureTermination::with_diagnostic(
+                    CaptureEnd::DataDiscontinuity,
+                    error.to_string(),
+                )
+            })?;
             callback_interval = None;
 
             match capture_tx.try_send(CaptureMessage::Packet(packet)) {
                 Ok(()) => {}
-                Err(TrySendError::Full(_)) => return Ok(PrototypeEnd::BoundedHandoffExhausted),
+                Err(TrySendError::Full(_)) => return Ok(CaptureEnd::BoundedHandoffExhausted),
                 Err(TrySendError::Disconnected(_)) => {
-                    return Err("processing path closed during capture".to_string())
+                    return Err(CaptureTermination::failed(
+                        "processing path closed during capture".to_string(),
+                    ))
                 }
             }
         }
@@ -709,10 +832,6 @@ fn set_end_once(signal: &AtomicU8, value: u8) {
     let _ = signal.compare_exchange(END_NONE, value, Ordering::AcqRel, Ordering::Acquire);
 }
 
-fn display_error(error: impl fmt::Display) -> String {
-    error.to_string()
-}
-
 struct ComGuard;
 
 impl Drop for ComGuard {
@@ -735,38 +854,165 @@ struct CaptureStarted {
 enum CaptureMessage {
     Started(CaptureStarted),
     Packet(CapturePacket),
-    Ended(PrototypeEnd),
-    Failed(String),
+    Ended(CaptureTermination),
+    Failed(CaptureFailure),
 }
 
+#[derive(Debug)]
+struct CaptureFailure {
+    kind: ErrorKind,
+    retry_hint: RetryHint,
+    message: String,
+}
+
+impl CaptureFailure {
+    fn source_unavailable(message: impl Into<String>) -> Self {
+        Self {
+            kind: ErrorKind::SourceUnavailable,
+            retry_hint: RetryHint::WaitForSource,
+            message: message.into(),
+        }
+    }
+
+    fn unsupported_format(message: impl Into<String>) -> Self {
+        Self {
+            kind: ErrorKind::UnsupportedFormat,
+            retry_hint: RetryHint::ChangeFormat,
+            message: message.into(),
+        }
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            kind: ErrorKind::Internal,
+            retry_hint: RetryHint::RetryLater,
+            message: message.into(),
+        }
+    }
+}
+
+impl From<CaptureFailure> for CaptureRunError {
+    fn from(failure: CaptureFailure) -> Self {
+        match failure.kind {
+            ErrorKind::SourceUnavailable => Self::SourceUnavailable(failure.message),
+            ErrorKind::UnsupportedFormat => Self::UnsupportedFormat(failure.message),
+            _ => Self::Backend(failure.message),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CaptureTermination {
+    end: CaptureEnd,
+    diagnostic: Option<String>,
+}
+
+impl CaptureTermination {
+    fn new(end: CaptureEnd) -> Self {
+        Self {
+            end,
+            diagnostic: None,
+        }
+    }
+
+    fn failed(diagnostic: String) -> Self {
+        Self::with_diagnostic(CaptureEnd::Failed, diagnostic)
+    }
+
+    fn with_diagnostic(end: CaptureEnd, diagnostic: String) -> Self {
+        Self {
+            end,
+            diagnostic: Some(diagnostic),
+        }
+    }
+}
+
+fn wasapi_stream_termination(context: &str, error: wasapi::WasapiError) -> CaptureTermination {
+    let end = match &error {
+        wasapi::WasapiError::DeviceNotFound(_) | wasapi::WasapiError::IllegalDeviceState(_) => {
+            CaptureEnd::SourceUnavailable
+        }
+        wasapi::WasapiError::Windows(error) if error.code().0 == AUDCLNT_E_DEVICE_INVALIDATED => {
+            CaptureEnd::SourceUnavailable
+        }
+        wasapi::WasapiError::UnsupportedFormat | wasapi::WasapiError::UnsupportedSubformat(_) => {
+            CaptureEnd::SourceReconfigured
+        }
+        _ => CaptureEnd::Interrupted,
+    };
+    CaptureTermination::with_diagnostic(end, format!("{context}: {error}"))
+}
+
+/// Failure to establish or operate the Windows capture boundary.
+///
+/// [`Self::kind`] and [`Self::retry_hint`] are stable, machine-actionable
+/// categories. [`fmt::Display`] is human diagnostic text and is not an API.
 #[non_exhaustive]
 #[derive(Debug)]
-pub enum PrototypeError {
+pub enum CaptureRunError {
     InvalidDuration,
-    InvalidHandoffCapacity,
+    SourceUnavailable(String),
+    UnsupportedFormat(String),
     Spawn(std::io::Error),
     CaptureChannelClosed,
     CaptureThreadPanicked,
-    Wasapi(String),
+    Backend(String),
     Contract(String),
     Protocol(&'static str),
     EvidenceOverflow,
     Capture(CaptureError),
 }
 
-impl fmt::Display for PrototypeError {
+impl CaptureRunError {
+    pub const fn kind(&self) -> ErrorKind {
+        match self {
+            Self::InvalidDuration => ErrorKind::InvalidRequest,
+            Self::SourceUnavailable(_) => ErrorKind::SourceUnavailable,
+            Self::UnsupportedFormat(_) => ErrorKind::UnsupportedFormat,
+            Self::Capture(CaptureError::UnsupportedChannelCount(_))
+            | Self::Capture(CaptureError::InvalidFormat(_)) => ErrorKind::UnsupportedFormat,
+            Self::Capture(_) => ErrorKind::StreamInterrupted,
+            Self::Spawn(_)
+            | Self::CaptureChannelClosed
+            | Self::CaptureThreadPanicked
+            | Self::Backend(_)
+            | Self::Contract(_)
+            | Self::Protocol(_)
+            | Self::EvidenceOverflow => ErrorKind::Internal,
+        }
+    }
+
+    pub const fn retry_hint(&self) -> RetryHint {
+        match self {
+            Self::InvalidDuration => RetryHint::DoNotRetry,
+            Self::SourceUnavailable(_) => RetryHint::WaitForSource,
+            Self::UnsupportedFormat(_) => RetryHint::ChangeFormat,
+            Self::Capture(CaptureError::UnsupportedChannelCount(_))
+            | Self::Capture(CaptureError::InvalidFormat(_)) => RetryHint::ChangeFormat,
+            Self::Capture(_) => RetryHint::RetryNow,
+            Self::Backend(_) => RetryHint::RetryLater,
+            Self::Spawn(_)
+            | Self::CaptureChannelClosed
+            | Self::CaptureThreadPanicked
+            | Self::Contract(_)
+            | Self::Protocol(_)
+            | Self::EvidenceOverflow => RetryHint::DoNotRetry,
+        }
+    }
+}
+
+impl fmt::Display for CaptureRunError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidDuration => formatter.write_str("capture duration must be non-zero"),
-            Self::InvalidHandoffCapacity => {
-                formatter.write_str("bounded handoff capacity must be non-zero")
-            }
+            Self::SourceUnavailable(message)
+            | Self::UnsupportedFormat(message)
+            | Self::Backend(message) => formatter.write_str(message),
             Self::Spawn(error) => write!(formatter, "failed to spawn capture thread: {error}"),
             Self::CaptureChannelClosed => {
                 formatter.write_str("capture channel closed without a terminal event")
             }
             Self::CaptureThreadPanicked => formatter.write_str("capture thread panicked"),
-            Self::Wasapi(message) => formatter.write_str(message),
             Self::Contract(message) => write!(formatter, "provider contract error: {message}"),
             Self::Protocol(message) => write!(formatter, "capture protocol error: {message}"),
             Self::EvidenceOverflow => formatter.write_str("capture evidence counter overflowed"),
@@ -775,12 +1021,224 @@ impl fmt::Display for PrototypeError {
     }
 }
 
-impl Error for PrototypeError {
+impl Error for CaptureRunError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             Self::Spawn(error) => Some(error),
             Self::Capture(error) => Some(error),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn packet(frame_index: u64, qpc_timestamp_100ns: u64) -> CapturePacket {
+        let samples = [0.25_f32, -0.25_f32];
+        let mut bytes = Vec::with_capacity(samples.len() * std::mem::size_of::<f32>());
+        for sample in samples {
+            bytes.extend_from_slice(&sample.to_le_bytes());
+        }
+        let byte_len = bytes.len();
+        CapturePacket::new(
+            bytes,
+            byte_len,
+            1,
+            frame_index,
+            qpc_timestamp_100ns,
+            PacketFlags::default(),
+            None,
+            Duration::ZERO,
+        )
+        .unwrap()
+    }
+
+    fn run_fake_stream() -> (CaptureReport, Vec<StreamEvent>) {
+        let (capture_tx, capture_rx) = mpsc::sync_channel(4);
+        let (recycle_tx, _recycle_rx) = mpsc::sync_channel(2);
+        capture_tx
+            .send(CaptureMessage::Started(CaptureStarted {
+                endpoint_name: "fake endpoint".to_string(),
+                native_sample_rate_hz: 48_000,
+                native_channel_count: 2,
+                maximum_packet_frames: 480,
+                format: CaptureFormat::mono_or_stereo(48_000, 2).unwrap(),
+                recycle_tx,
+            }))
+            .unwrap();
+        capture_tx
+            .send(CaptureMessage::Packet(packet(100, 1_000)))
+            .unwrap();
+        capture_tx
+            .send(CaptureMessage::Packet(packet(101, 1_208)))
+            .unwrap();
+        capture_tx
+            .send(CaptureMessage::Ended(CaptureTermination::new(
+                CaptureEnd::DurationElapsed,
+            )))
+            .unwrap();
+
+        let mut events = Vec::new();
+        let mut on_event = |event| events.push(event);
+        let report = process_capture(capture_rx, CaptureStopToken::new(), &mut on_event).unwrap();
+        (report, events)
+    }
+
+    #[test]
+    fn bounded_handoff_delivers_every_packet_and_recycles_every_buffer() {
+        let (report, events) = run_fake_stream();
+
+        assert_eq!(report.packet_count, 2);
+        assert_eq!(report.audio_frame_count, 2);
+        assert_eq!(report.source_frame_count, 2);
+        assert_eq!(report.end, CaptureEnd::DurationElapsed);
+        assert_eq!(report.end_diagnostic, None);
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0], StreamEvent::Started(_)));
+        assert!(matches!(events[1], StreamEvent::Data(_)));
+        assert!(matches!(events[2], StreamEvent::Data(_)));
+        assert!(matches!(
+            events[3],
+            StreamEvent::Ended {
+                reason: StreamEndReason::ConsumerCancelled,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn overload_is_explicit_and_machine_actionable() {
+        let source_id = SourceId::new("default-playback").unwrap();
+        let stream_id = StreamId::new("stream-test").unwrap();
+        let (error, reason) = contract_end(
+            CaptureEnd::BoundedHandoffExhausted,
+            None,
+            &source_id,
+            &stream_id,
+        );
+        let error = error.unwrap();
+
+        assert_eq!(error.kind(), ErrorKind::ResourceExhausted);
+        assert_eq!(error.retry_hint(), RetryHint::RetryLater);
+        assert_eq!(reason, StreamEndReason::Failed);
+        assert!(error
+            .message()
+            .contains("no audio packet was silently dropped"));
+    }
+
+    #[test]
+    fn normal_stop_and_platform_boundaries_map_to_contract_lifecycle() {
+        let source_id = SourceId::new("default-playback").unwrap();
+        let stream_id = StreamId::new("stream-test").unwrap();
+
+        let (error, reason) = contract_end(CaptureEnd::StopRequested, None, &source_id, &stream_id);
+        assert!(error.is_none());
+        assert_eq!(reason, StreamEndReason::ProviderShutdown);
+
+        let cases = [
+            (
+                CaptureEnd::SourceReconfigured,
+                ErrorKind::StreamInterrupted,
+                RetryHint::RetryNow,
+                StreamEndReason::SourceReconfigured,
+            ),
+            (
+                CaptureEnd::SourceUnavailable,
+                ErrorKind::SourceUnavailable,
+                RetryHint::WaitForSource,
+                StreamEndReason::SourceEnded,
+            ),
+            (
+                CaptureEnd::Interrupted,
+                ErrorKind::StreamInterrupted,
+                RetryHint::RetryLater,
+                StreamEndReason::Failed,
+            ),
+            (
+                CaptureEnd::DataDiscontinuity,
+                ErrorKind::StreamInterrupted,
+                RetryHint::RetryNow,
+                StreamEndReason::Failed,
+            ),
+            (
+                CaptureEnd::Failed,
+                ErrorKind::Internal,
+                RetryHint::RetryLater,
+                StreamEndReason::Failed,
+            ),
+        ];
+        for (end, kind, retry, expected_reason) in cases {
+            let (error, reason) =
+                contract_end(end, Some("diagnostic detail"), &source_id, &stream_id);
+            let error = error.unwrap();
+            assert_eq!(error.kind(), kind);
+            assert_eq!(error.retry_hint(), retry);
+            assert_eq!(reason, expected_reason);
+            assert_eq!(error.message(), "diagnostic detail");
+        }
+    }
+
+    #[test]
+    fn separate_capture_runs_restart_stream_identity_and_timeline() {
+        let (_, first_events) = run_fake_stream();
+        let (_, second_events) = run_fake_stream();
+
+        let first_stream = match &first_events[0] {
+            StreamEvent::Started(descriptor) => descriptor.stream_id(),
+            _ => panic!("first event was not stream start"),
+        };
+        let second_stream = match &second_events[0] {
+            StreamEvent::Started(descriptor) => descriptor.stream_id(),
+            _ => panic!("first event was not stream start"),
+        };
+        assert_ne!(first_stream, second_stream);
+
+        for events in [&first_events, &second_events] {
+            match &events[1] {
+                StreamEvent::Data(packet) => match packet.payload() {
+                    SignalPayload::Waveform(frame) => {
+                        assert_eq!(frame.window().start().frame_index(), 0);
+                        assert_eq!(frame.window().start().stream_time_ns(), 0);
+                    }
+                    _ => panic!("fake capture did not emit waveform data"),
+                },
+                _ => panic!("second event was not stream data"),
+            }
+        }
+    }
+
+    #[test]
+    fn run_errors_expose_categories_separately_from_diagnostics() {
+        let invalid_duration = CaptureRunError::InvalidDuration;
+        assert_eq!(invalid_duration.kind(), ErrorKind::InvalidRequest);
+        assert_eq!(invalid_duration.retry_hint(), RetryHint::DoNotRetry);
+
+        let unsupported = CaptureRunError::Capture(CaptureError::UnsupportedChannelCount(6));
+        assert_eq!(unsupported.kind(), ErrorKind::UnsupportedFormat);
+        assert_eq!(unsupported.retry_hint(), RetryHint::ChangeFormat);
+        assert!(unsupported.to_string().contains("one or two channels"));
+
+        let unavailable = CaptureRunError::SourceUnavailable("endpoint missing".to_string());
+        assert_eq!(unavailable.kind(), ErrorKind::SourceUnavailable);
+        assert_eq!(unavailable.retry_hint(), RetryHint::WaitForSource);
+    }
+
+    #[test]
+    fn runtime_backend_errors_retain_lifecycle_categories() {
+        let unavailable = wasapi_stream_termination(
+            "packet query failed",
+            wasapi::WasapiError::IllegalDeviceState(0),
+        );
+        assert_eq!(unavailable.end, CaptureEnd::SourceUnavailable);
+        assert!(unavailable
+            .diagnostic
+            .unwrap()
+            .contains("packet query failed"));
+
+        let format_changed =
+            wasapi_stream_termination("packet read failed", wasapi::WasapiError::UnsupportedFormat);
+        assert_eq!(format_changed.end, CaptureEnd::SourceReconfigured);
     }
 }
