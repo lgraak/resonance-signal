@@ -186,9 +186,20 @@
 - Defined agent-internal operational observability and the representative failure, outage, retry-success, recurrence, resource-impact, and synchronization evidence required before numeric values can be approved.
 - Kept exact values, deterministic delay calculation, jitter sampling, configuration loading/reload, persistence, telemetry, clocks, timers, scheduling, reconnect, endpoint watching, owner replacement, and all recovery execution deferred. The runtime remains explicitly recovery-disabled.
 
+## Milestone 6K: Recovery evidence collection and acceptance matrix
+
+- Defined representative device-availability, source-reconfiguration, interruption, resource-pressure, and startup-failure scenarios, including the evidence and baseline comparison required for each.
+- Required common evidence to bind intent generation, configuration identity, recovery episode, retry-state revision, source selection, prior attempt, terminal delivery, joined cleanup, timing, user impact, and resource impact.
+- Defined class-specific availability, supported-format, backend-ready, pressure-clear, and retry-safe startup evidence; stale, missing, contradictory, diagnostic-only, and cross-context evidence fails closed.
+- Planned controlled experiments that compare natural resumption with restart-assisted recovery and measure success by attempt ordinal, detection-to-stable-frame time, recurrence, operator impact, resource behavior, and multi-instance synchronization.
+- Required each candidate class or subtype to meet predeclared cohort-specific reliability, uncertainty, user-impact, stability, and stopping objectives before it can move from manual-only to automatically recoverable; no arbitrary acceptance percentage was selected.
+- Kept explicit stop, panic, suspected corruption, invariant failure, incomplete cleanup, active ownership, exhausted accounting, unchanged causal preconditions, and unsupported cohorts outside automatic recovery.
+- Kept experiments, fault-injection tooling, numeric thresholds, production retry values, telemetry, timers, watchers, reconnect, replacement owners, and every recovery execution mechanism deferred. Recovery evidence and policy internals remain private to `resonance-agent`.
+
 ## Later milestones
 
-- Collect representative operational evidence and select exact retry, cooldown, backoff, jitter, and stable-run values; define deterministic delay calculation and jitter sampling; and design a configuration source/reload boundary in separately scoped milestones.
+- Execute the accepted measurement plan, collect representative operational evidence, and review candidate failure classes without enabling recovery.
+- Select exact retry, cooldown, backoff, jitter, and stable-run values only from accepted evidence; define deterministic delay calculation and jitter sampling; and design a configuration source/reload boundary in separately scoped milestones.
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
