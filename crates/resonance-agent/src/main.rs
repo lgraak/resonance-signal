@@ -2,7 +2,8 @@
 
 #[cfg(windows)]
 fn main() {
-    use resonance_agent::windows::{CaptureOwner, CaptureOwnerCompletion, CaptureOwnerStart};
+    use resonance_agent::supervisor::{CaptureSupervisor, CaptureSupervisorStart};
+    use resonance_agent::windows::CaptureOwnerCompletion;
     use std::time::Duration;
 
     let duration = match parse_duration(std::env::args().skip(1)) {
@@ -14,23 +15,30 @@ fn main() {
         }
     };
 
-    let mut owner = CaptureOwner::new(print_lifecycle_event);
-    match owner.start() {
-        Ok(CaptureOwnerStart::Started) => {}
-        Ok(CaptureOwnerStart::StopAlreadyRequested) => {
-            eprintln!("capture owner stopped before startup");
+    let mut supervisor = CaptureSupervisor::new(print_lifecycle_event);
+    match supervisor.start() {
+        Ok(CaptureSupervisorStart::Started) => {}
+        Ok(CaptureSupervisorStart::StoppedBeforeStart) => {
+            eprintln!("capture supervisor stopped before startup");
             std::process::exit(1);
         }
         Err(error) => {
-            eprintln!("Windows playback-loopback owner failed to start: {error}");
+            eprintln!("Windows playback-loopback supervisor failed to start: {error}");
             std::process::exit(1);
         }
     }
 
     std::thread::sleep(duration);
-    match owner.shutdown(Duration::from_secs(2)) {
-        Ok(CaptureOwnerCompletion::Finished(report)) => println!("{report}"),
-        Ok(CaptureOwnerCompletion::Failed(error)) => {
+    if let Err(error) = supervisor.stop(Duration::from_secs(2)) {
+        eprintln!("Windows playback-loopback supervisor shutdown failed: {error}");
+        std::process::exit(1);
+    }
+    match supervisor
+        .owner_completion()
+        .expect("a started supervisor retains its completed owner")
+    {
+        CaptureOwnerCompletion::Finished(report) => println!("{report}"),
+        CaptureOwnerCompletion::Failed(error) => {
             eprintln!(
                 "Windows playback-loopback capture failed: kind={:?}, retry={:?}, message={error}",
                 error.kind(),
@@ -38,20 +46,16 @@ fn main() {
             );
             std::process::exit(1);
         }
-        Ok(CaptureOwnerCompletion::StoppedBeforeStart) => {
+        CaptureOwnerCompletion::StoppedBeforeStart => {
             eprintln!("capture owner stopped before startup");
             std::process::exit(1);
         }
-        Ok(CaptureOwnerCompletion::StartFailed(message)) => {
+        CaptureOwnerCompletion::StartFailed(message) => {
             eprintln!("Windows playback-loopback owner failed to start: {message}");
             std::process::exit(1);
         }
-        Ok(CaptureOwnerCompletion::Panicked) => {
+        CaptureOwnerCompletion::Panicked => {
             eprintln!("Windows playback-loopback owner panicked");
-            std::process::exit(1);
-        }
-        Err(error) => {
-            eprintln!("Windows playback-loopback owner shutdown failed: {error}");
             std::process::exit(1);
         }
     }

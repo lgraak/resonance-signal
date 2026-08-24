@@ -220,6 +220,10 @@ pub struct CaptureOwnerShutdownTimeout {
 }
 
 impl CaptureOwnerShutdownTimeout {
+    pub const fn new(timeout: Duration) -> Self {
+        Self { timeout }
+    }
+
     pub const fn timeout(self) -> Duration {
         self.timeout
     }
@@ -229,7 +233,7 @@ impl fmt::Display for CaptureOwnerShutdownTimeout {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "capture owner did not stop within {:?}; ownership was retained",
+            "capture owner did not complete within {:?}; ownership was retained",
             self.timeout
         )
     }
@@ -359,12 +363,24 @@ impl CaptureOwner {
             self.on_event.take();
             self.completion = Some(CaptureOwnerCompletion::StoppedBeforeStart);
         }
+        self.wait_for_completion(timeout)
+    }
+
+    /// Waits for bounded completion without requesting stop.
+    ///
+    /// A successful wait joins the owner worker. The worker has already joined
+    /// its nested WASAPI thread, so all capture resources and callbacks are
+    /// released before this method returns. Waiting on an owner that has not
+    /// been started times out without changing its state.
+    pub fn wait_for_completion(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<&CaptureOwnerCompletion, CaptureOwnerShutdownTimeout> {
         if self.completion.is_none() {
-            let result = self
-                .completion_rx
-                .as_ref()
-                .expect("a started capture owner retains its completion receiver")
-                .recv_timeout(timeout);
+            let Some(completion_rx) = self.completion_rx.as_ref() else {
+                return Err(CaptureOwnerShutdownTimeout::new(timeout));
+            };
+            let result = completion_rx.recv_timeout(timeout);
             match result {
                 Ok(completion) => {
                     self.completion = Some(completion);
@@ -372,7 +388,7 @@ impl CaptureOwner {
                     self.join_worker();
                 }
                 Err(RecvTimeoutError::Timeout) => {
-                    return Err(CaptureOwnerShutdownTimeout { timeout });
+                    return Err(CaptureOwnerShutdownTimeout::new(timeout));
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     self.completion = Some(CaptureOwnerCompletion::Panicked);
@@ -1498,6 +1514,30 @@ mod tests {
         assert_eq!(drops.load(Ordering::SeqCst), 1);
         assert!(owner.worker.is_none());
         assert!(owner.completion().is_some());
+    }
+
+    #[test]
+    fn completion_can_be_observed_without_requesting_stop() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let runner_drops = drops.clone();
+        let mut owner = CaptureOwner::with_runner(
+            |_| {},
+            move |_, _| {
+                let _resource = DropCounter(runner_drops);
+                Ok(fake_report(CaptureEnd::SourceUnavailable))
+            },
+        );
+
+        owner.start().unwrap();
+        assert!(matches!(
+            owner.wait_for_completion(Duration::from_secs(1)).unwrap(),
+            CaptureOwnerCompletion::Finished(CaptureReport {
+                end: CaptureEnd::SourceUnavailable,
+                ..
+            })
+        ));
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert!(owner.worker.is_none());
     }
 
     #[test]

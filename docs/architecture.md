@@ -101,7 +101,7 @@ WASAPI device position validates packet adjacency. QPC timestamp validity and mo
 
 Endpoint and session callbacks perform only an atomic first-reason update. Default playback replacement, format change, endpoint invalidation, device removal, session disconnect, later packet discontinuity, or timing failure stops the current WASAPI stream and emits an explicit provider error/end event. A normal owner stop is requested through a cloneable `CaptureStopToken` and maps to `ProviderShutdown`. Duration belongs only to the diagnostic runner and maps to `ConsumerCancelled`.
 
-The adapter does not reconnect or continuously follow the default device. Invoking a later capture run is the explicit restart operation and establishes a new stream identity, frame index zero, and timestamp zero. This keeps reconnection policy with the future supervisor and prevents retry loops from being hidden inside platform capture.
+The adapter does not reconnect or continuously follow the default device. Invoking a later capture run is the explicit restart operation and establishes a new stream identity, frame index zero, and timestamp zero. This keeps reconnection policy at the supervisor boundary and prevents retry loops from being hidden inside platform capture.
 
 ### Capture owner lifecycle
 
@@ -155,11 +155,11 @@ CaptureOwner
 WASAPI thread
 ```
 
-The supervisor creates and owns at most one active owner for a supervised capture intent. It may evaluate recovery only after the prior owner has delivered its terminal lifecycle, completed, and released all nested resources. It owns retry-policy application, backoff and attempt state, endpoint-replacement acceptance, default-device-following policy, and suppression of recovery after explicit shutdown. It does not own COM or native capture resources, and retry hints remain policy inputs rather than commands.
+The recovery-disabled supervisor creates and owns at most one single-use owner for a supervised capture intent. Its deterministic states are `Idle`, `Running`, `Stopping`, and `Completed`. Start is permitted only from `Idle`; it creates the owner through a narrow `CaptureOwnerFactory`, wraps and forwards the consumer event callback, and starts the owner. Stop first clears desired-running intent, then requests owner stop and waits for joined completion. Stop before start transitions directly to `Completed` without creating an owner, and repeated stops retain the same completion. A bounded wait timeout leaves the owner and `Stopping` state intact so the caller can wait again.
 
-Every owner event remains visible to consumers. A replacement owner emits a new `Started` event with a new `StreamId`, frame index zero, and stream time zero; the supervisor cannot conceal the prior `Error`/`Ended` transition or synthesize continuity. Human messages and logs are diagnostic evidence only. Recovery decisions use typed error categories, retry hints, end reasons, completion, desired state, and future configured policy.
+Every owner event remains visible to consumers. The supervisor records typed error kind, retry hint, and end reason only after the consumer callback returns. `CaptureOwner::wait_for_completion` observes natural termination without requesting stop and joins the owner worker; successful completion therefore means callbacks have ended and nested WASAPI resources have been released. The supervisor retains a typed completion summary and the full owner completion.
 
-The supervisor boundary is accepted design, not implemented behavior. Retry timing, backoff, default-device following, source-availability detection, service lifetime, and transport exposure remain deferred. See [ADR 0007](decisions/0007-capture-supervisor-boundary.md).
+Replacement eligibility is only a recorded mechanical boundary: desired-running intent is still enabled, an `Ended` event was delivered, owner completion was received, and resources were released. No supervisor method consumes that eligibility or creates another owner, including after normal completion, capture failure, startup failure, or panic. Automatic reconnect, retry timing, backoff, outcome policy, default-device following, source-availability detection, service lifetime, and transport exposure remain deferred. A future replacement would still require a new `StreamId`, frame index zero, and stream time zero; the supervisor cannot conceal the prior `Error`/`Ended` transition or synthesize continuity. See [ADR 0007](decisions/0007-capture-supervisor-boundary.md).
 
 ## Contract flow
 
@@ -202,7 +202,7 @@ Future products remain separate branches from the waveform input. A later `Spect
 
 ## Current constraints
 
-- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner in `resonance-agent`; the supervisor boundary above it is designed but no supervisor, reconnecting service, or service installation exists.
+- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner and a recovery-disabled supervisor in `resonance-agent`; no reconnecting service, recovery policy, or service installation exists.
 - Windows microphone capture and all Linux capture remain unimplemented.
 - Supported future capture output is limited to mono and two-channel stereo; wider, spatial, and object-based formats are rejected unless the platform supplies a valid mono/stereo representation.
 - Custom downmixing and silent first-two-channel extraction are prohibited.

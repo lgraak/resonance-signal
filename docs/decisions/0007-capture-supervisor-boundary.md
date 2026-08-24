@@ -9,7 +9,7 @@ Add a `CaptureSupervisor` boundary in `resonance-agent` above the existing singl
 
 `CaptureOwner` remains the resource owner for exactly one capture lifetime. Recovery never reopens or continues that lifetime. A replacement owner starts a new stream with a new `StreamId`, frame index zero, and stream time zero.
 
-This decision defines responsibilities only. It does not implement the supervisor, reconnect, retry loops, endpoint following, or any capture behavior.
+Milestone 6C implements the recovery-disabled supervisor mechanics described by this decision: one owner factory seam, one owner creation attempt, explicit start/stop, terminal-event observation, joined completion, and recorded replacement eligibility. It does not implement reconnect, retry loops, endpoint following, or any recovery policy.
 
 ## Context
 
@@ -165,7 +165,7 @@ Limitations:
 - existing retry hints are guidance and do not by themselves define safe timing or attempt limits;
 - consumers may experience gaps between independently identified streams.
 
-Future implementation must introduce the supervisor as a narrow orchestration layer around, rather than inside, `CaptureOwner`. Tests will need to prove no overlapping owners, stop-suppresses-recovery behavior, typed outcome decisions, bounded policy state, and new identity/timeline semantics for every replacement.
+The implemented supervisor is a narrow orchestration layer around, rather than inside, `CaptureOwner`. Hardware-independent tests prove no overlapping owners, stop-suppresses-recovery behavior, terminal-before-completion ordering, and typed outcomes. Bounded recovery policy and replacement identity/timeline behavior remain future work because no replacement is created.
 
 ## Deferred Decisions
 
@@ -174,7 +174,7 @@ Future implementation must introduce the supervisor as a narrow orchestration la
 - which outcomes are retryable under which policy;
 - default-device following policy and endpoint-replacement acceptance criteria;
 - source-availability detection or polling mechanism;
-- supervisor public API and concrete recovery-state representation;
+- recovery-policy state beyond the implemented `Idle`, `Running`, `Stopping`, and `Completed` lifecycle;
 - service lifetime, startup mode, and shutdown deadline;
 - transport behavior and whether recovery state is exposed beyond existing stream events;
 - configuration ownership and operational evidence format.

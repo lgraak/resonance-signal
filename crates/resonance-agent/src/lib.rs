@@ -3,4 +3,7 @@
 pub mod capture;
 
 #[cfg(windows)]
+pub mod supervisor;
+
+#[cfg(windows)]
 pub mod windows;

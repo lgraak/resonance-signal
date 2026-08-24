@@ -92,9 +92,19 @@
 - Defined future handling responsibilities for default-endpoint removal or replacement, device disablement, format change, and temporary interruption without implementing reconnect or device watching.
 - Deferred retry timing, backoff algorithm, default-device-following policy, service lifetime, and transport behavior.
 
+## Milestone 6C: Capture supervisor state boundary
+
+- Added a recovery-disabled `CaptureSupervisor` in `resonance-agent` with deterministic `Idle`, `Running`, `Stopping`, and `Completed` states.
+- Added a narrow `CaptureOwnerFactory`/`SupervisedCaptureOwner` seam so lifecycle coordination is testable without audio hardware while the production factory creates the existing WASAPI `CaptureOwner`.
+- Made supervisor start single-use, owner creation explicit, stop-before-start owner-free, and repeated stop requests idempotent.
+- Added natural owner completion observation that joins the worker without implicitly requesting stop; successful completion proves callbacks ended and nested resources were released.
+- Recorded typed terminal event and owner completion state, while treating replacement eligibility only as an unconsumed boundary requiring delivered `Ended`, completion, resource release, and still-enabled running intent.
+- Proved with hardware-independent tests that only one owner is created, no replacement occurs, explicit stop suppresses eligibility, terminal delivery precedes completion handling, and normal, failure, startup-failure, and panic outcomes are deterministic.
+- Kept reconnect, retry timers, backoff, endpoint watchers, default-device following, and all recovery policy unimplemented.
+
 ## Later milestones
 
-- Implement and validate the supervisor state boundary without adding reconnect, then add separately approved retry/backoff and controlled endpoint-replacement behavior.
+- Design and add separately approved retry/backoff and controlled endpoint-replacement behavior above the completed recovery-disabled state boundary.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
