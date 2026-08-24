@@ -102,9 +102,20 @@
 - Proved with hardware-independent tests that only one owner is created, no replacement occurs, explicit stop suppresses eligibility, terminal delivery precedes completion handling, and normal, failure, startup-failure, and panic outcomes are deterministic.
 - Kept reconnect, retry timers, backoff, endpoint watchers, default-device following, and all recovery policy unimplemented.
 
+## Milestone 6D: Recovery decision policy design
+
+- Defined recovery as supervisor-owned orchestration above the one-lifetime `CaptureOwner`, with a deterministic side-effect-free `RecoveryPolicy` evaluation boundary inside `resonance-agent`.
+- Defined remain-stopped, wait, and permit-replacement as policy decision classes; authorization remains separate from owner creation, timers, watchers, and other mechanisms.
+- Made explicit stop invalidate the running-intent generation and every pending recovery authorization before owner shutdown; late events remain evidence and cannot restore intent.
+- Defined outcome-specific permission and evidence rules for shutdown, endpoint loss or reconfiguration, format change, interruption, resource exhaustion, unsupported format, internal failure, startup failure, and panic.
+- Required weak or diagnostic-only classification to fail closed, with retry hints treated as constraints rather than commands.
+- Assigned bounded attempts, delays, backoff, jitter, cooldowns, reset rules, and persistence to future retry policy without selecting values or algorithms.
+- Preserved independent replacement streams with a new `StreamId`, frame index zero, stream-relative time zero, and fully visible terminal/start lifecycle boundaries.
+- Kept reconnect, replacement owner creation, retry scheduling, endpoint watching, default-device following, and all runtime capture behavior unimplemented.
+
 ## Later milestones
 
-- Design and add separately approved retry/backoff and controlled endpoint-replacement behavior above the completed recovery-disabled state boundary.
+- Define structured recovery-cause evidence needed by the guarded policy rows, then implement and validate bounded retry/backoff policy without endpoint watchers or replacement capture unless separately approved.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.

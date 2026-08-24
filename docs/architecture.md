@@ -137,16 +137,19 @@ A stop request is an atomic, idempotent signal. A pre-start stop prevents initia
 
 The owner does not contain retry, backoff, default-device following, or endpoint replacement policy. It cannot be restarted.
 
-### Capture supervisor boundary
+### Capture supervisor and recovery-policy boundary
 
-Recovery policy belongs to a future `CaptureSupervisor` in `resonance-agent`, above the single-use owner:
+Recovery policy belongs to `CaptureSupervisor` orchestration in `resonance-agent`, above the single-use owner. A side-effect-free `RecoveryPolicy` decision boundary classifies structured evidence; it does not own capture or scheduling:
 
 ```text
 CaptureSupervisor
     |-- owns desired running/stopped state
     |-- owns the current CaptureOwner
+    |-- owns attempts and retry state
     |-- observes typed events and completion
-    |-- decides stop, wait/backoff, or replacement
+    |-- applies RecoveryPolicy decisions
+    |
+    +--> RecoveryPolicy: remain stopped, wait, or permit replacement
     |
     v
 CaptureOwner
@@ -159,7 +162,11 @@ The recovery-disabled supervisor creates and owns at most one single-use owner f
 
 Every owner event remains visible to consumers. The supervisor records typed error kind, retry hint, and end reason only after the consumer callback returns. `CaptureOwner::wait_for_completion` observes natural termination without requesting stop and joins the owner worker; successful completion therefore means callbacks have ended and nested WASAPI resources have been released. The supervisor retains a typed completion summary and the full owner completion.
 
-Replacement eligibility is only a recorded mechanical boundary: desired-running intent is still enabled, an `Ended` event was delivered, owner completion was received, and resources were released. No supervisor method consumes that eligibility or creates another owner, including after normal completion, capture failure, startup failure, or panic. Automatic reconnect, retry timing, backoff, outcome policy, default-device following, source-availability detection, service lifetime, and transport exposure remain deferred. A future replacement would still require a new `StreamId`, frame index zero, and stream time zero; the supervisor cannot conceal the prior `Error`/`Ended` transition or synthesize continuity. See [ADR 0007](decisions/0007-capture-supervisor-boundary.md).
+Replacement eligibility is only a recorded mechanical boundary: desired-running intent is still enabled, an `Ended` event was delivered, owner completion was received, and resources were released. No supervisor method consumes that eligibility or creates another owner, including after normal completion, capture failure, startup failure, or panic.
+
+The recovery decision model fails closed. Explicit stop first invalidates the running-intent generation and any pending authorization, then joins cleanup; late events remain visible but cannot reactivate recovery. Device loss, reconfiguration, interruption, and resource exhaustion are only conditionally recoverable. Unsupported format under unchanged conditions, unclassified startup failure, and worker panic remain stopped. Retry hints constrain policy but never command it. Future attempt counts, cooldowns, backoff, source evidence, and reset state belong to the supervisor, while a pure policy evaluation returns remain-stopped, wait, or permit-replacement. No timer, watcher, reconnect, or replacement exists. See [ADR 0007](decisions/0007-capture-supervisor-boundary.md) and [ADR 0008](decisions/0008-recovery-policy-boundary.md).
+
+A future replacement would still require a new `StreamId`, frame index zero, and stream time zero; the supervisor cannot conceal the prior `Error`/`Ended` transition or synthesize continuity. Consumers observe lifecycle facts and platform-neutral errors, not policy state, attempt counts, or parsed diagnostics.
 
 ## Contract flow
 
@@ -202,7 +209,7 @@ Future products remain separate branches from the waveform input. A later `Spect
 
 ## Current constraints
 
-- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner and a recovery-disabled supervisor in `resonance-agent`; no reconnecting service, recovery policy, or service installation exists.
+- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner and a recovery-disabled supervisor in `resonance-agent`; its recovery decision policy is documented but no reconnecting service, retry mechanism, replacement behavior, or service installation exists.
 - Windows microphone capture and all Linux capture remain unimplemented.
 - Supported future capture output is limited to mono and two-channel stereo; wider, spatial, and object-based formats are rejected unless the platform supplies a valid mono/stereo representation.
 - Custom downmixing and silent first-two-channel extraction are prohibited.

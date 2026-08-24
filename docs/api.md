@@ -140,7 +140,7 @@ The following remain experimental in 0.1:
 - transport, framing, delivery, backpressure, and authentication;
 - wall-clock correlation between streams or hosts.
 
-Backend selection is recorded in [ADR 0004](decisions/0004-capture-backend-selection.md), the production Windows lifecycle/buffering policy is recorded in [ADR 0005](decisions/0005-windows-capture-lifecycle-and-buffering.md), and the explicit capture-owner state machine is recorded in [ADR 0006](decisions/0006-capture-owner-lifecycle.md). These decisions do not change the consumer contract: platform types and dependencies remain private to `resonance-agent`.
+Backend selection is recorded in [ADR 0004](decisions/0004-capture-backend-selection.md), the production Windows lifecycle/buffering policy is recorded in [ADR 0005](decisions/0005-windows-capture-lifecycle-and-buffering.md), the explicit capture-owner state machine is recorded in [ADR 0006](decisions/0006-capture-owner-lifecycle.md), the supervisor boundary is recorded in [ADR 0007](decisions/0007-capture-supervisor-boundary.md), and the recovery decision model is recorded in [ADR 0008](decisions/0008-recovery-policy-boundary.md). These decisions do not change the consumer contract: platform types and dependencies remain private to `resonance-agent`.
 
 ## Windows playback-loopback capture
 
@@ -160,7 +160,11 @@ A data-discontinuity flag on the first accepted packet describes history before 
 
 The capture owner does not reconnect automatically and cannot be restarted. The recovery-disabled `CaptureSupervisor` in `resonance-agent` owns desired-running intent, creates one owner through `CaptureOwnerFactory`, starts and stops it, forwards its events, and records joined completion. Its states are `Idle`, `Running`, `Stopping`, and `Completed`; it cannot be started twice. A stop before start creates no owner. Explicit stop clears desired-running intent before requesting owner stop, so replacement eligibility is suppressed even if a terminal event and completion follow.
 
-`replacement_eligible` only reports that desired-running intent remains enabled, an `Ended` event was delivered to the consumer, owner completion was received, and resources were released. It does not create a replacement or constitute recovery policy. Startup failure or panic without an `Ended` event is not mechanically eligible. Automatic reconnect, retry/backoff, endpoint watching, default-device following, and outcome policy remain deferred. Retry hints are future policy inputs, not commands. These agent-only lifecycle types do not change `resonance-core` or `resonance-api`. Every later capture run still requires a new `StreamId`, frame index zero, and timestamp zero; recovery cannot be hidden as continuation. Consumers and supervisors must not parse console or `Display` output.
+`replacement_eligible` only reports that desired-running intent remains enabled, an `Ended` event was delivered to the consumer, owner completion was received, and resources were released. It does not create a replacement or constitute recovery policy. Startup failure or panic without an `Ended` event is not mechanically eligible.
+
+The documented future policy evaluates typed intent, terminal outcome, completion, resource release, source-selection mode, and bounded retry state. Explicit stop invalidates pending recovery before owner shutdown; late events remain visible evidence but cannot restore intent. Device loss, reconfiguration, interruption, and resource exhaustion are conditional cases. Unsupported format under unchanged conditions, a coarsely classified startup failure, and worker panic remain stopped. Retry hints constrain a decision but are never commands. Automatic reconnect, retry/backoff mechanisms, endpoint watching, default-device following, and replacement creation remain unimplemented.
+
+These agent-only policy decisions do not change `resonance-core` or `resonance-api`. Consumers observe ordered lifecycle events, platform-neutral error categories and scopes, retry hints, end reasons, and independent stream identities. They do not parse policy, attempt counts, logs, console output, `Display` text, or `ProviderError::message`. Every later capture run still requires a new `StreamId`, frame index zero, and timestamp zero; recovery cannot be hidden as continuation.
 
 On Windows, a ten-second evidence run is:
 
