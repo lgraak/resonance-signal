@@ -103,6 +103,40 @@ Endpoint and session callbacks perform only an atomic first-reason update. Defau
 
 The adapter does not reconnect or continuously follow the default device. Invoking a later capture run is the explicit restart operation and establishes a new stream identity, frame index zero, and timestamp zero. This keeps reconnection policy with the future owner and prevents retry loops from being hidden inside platform capture.
 
+### Capture owner lifecycle
+
+The Windows `CaptureOwner` is the single public lifetime owner for one long-running run. Construction is inert. `start` transfers the event callback and blocking adapter runner to one ordinary owner worker. That worker owns the capture result and the obligation to join its nested WASAPI thread; the WASAPI thread exclusively owns COM initialization, endpoint/client objects, notification registrations, event handles, and the bounded native buffer pool.
+
+```text
+CaptureOwner
+    |
+    | start: transfer callback + runner
+    v
+ordinary owner worker
+    |-- owns provider event processing and callback
+    |-- owns capture completion
+    |-- owns join obligation for WASAPI thread
+    |
+    v
+WASAPI thread
+    |-- owns COM and all endpoint/client resources
+    |-- releases registrations, stream, handles, and COM before exit
+```
+
+The owner state machine is deliberately single-use:
+
+```text
+created --start--> running --terminal event or stop--> completed + joined
+   |                  |
+   | stop             | shutdown timeout
+   v                  v
+stopped-before-start  running, ownership retained
+```
+
+A stop request is an atomic, idempotent signal. A pre-start stop prevents initialization. During a run, the WASAPI event loop observes stop at least once per 100 ms wait interval, stops the audio client, emits the existing terminal event, releases its thread-affine resources, and exits. The ordinary owner worker finishes callbacks, joins the WASAPI thread, and reports completion. `shutdown` bounds only the caller's wait: a timeout never detaches the worker or moves the callback out of the owner, and the caller can wait again. Successful shutdown returns only after the worker is joined, so no event callback or capture resource remains live. Callbacks must return promptly; a callback that blocks can cause bounded shutdown to time out. Drop provides a final request-and-join cleanup path.
+
+The owner does not contain retry, backoff, default-device following, or endpoint replacement policy. It cannot be restarted. A future recovery layer may decide to create a new owner, but each such run must preserve the existing new-`StreamId`, frame-index-zero, and stream-time-zero rules and expose every terminal lifecycle transition.
+
 ## Contract flow
 
 1. A consumer submits a `SubscriptionRequest` naming one or more source selectors and signal products.
@@ -144,7 +178,7 @@ Future products remain separate branches from the waveform input. A later `Spect
 
 ## Current constraints
 
-- The Windows default-playback loopback capture boundary is productionized in `resonance-agent`; no reconnecting service or service installation exists.
+- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner in `resonance-agent`; no reconnecting service or service installation exists.
 - Windows microphone capture and all Linux capture remain unimplemented.
 - Supported future capture output is limited to mono and two-channel stereo; wider, spatial, and object-based formats are rejected unless the platform supplies a valid mono/stereo representation.
 - Custom downmixing and silent first-two-channel extraction are prohibited.
@@ -155,4 +189,4 @@ Future products remain separate branches from the waveform input. A later `Spect
 - No consumer or visualization code belongs in this repository.
 - End-to-end capture latency is not measured because cross-clock correlation is deferred.
 
-See [ADR 0001](decisions/0001-audio-data-contract.md) for the audio contract, [ADR 0002](decisions/0002-bounded-window-scheduling.md) for scheduling and buffering decisions, [ADR 0003](decisions/0003-stereo-first-capture-boundary.md) for capture scope and enforcement, [ADR 0004](decisions/0004-capture-backend-selection.md) for backend evidence and implementation direction, and [ADR 0005](decisions/0005-windows-capture-lifecycle-and-buffering.md) for the production Windows lifecycle and bounded handoff.
+See [ADR 0001](decisions/0001-audio-data-contract.md) for the audio contract, [ADR 0002](decisions/0002-bounded-window-scheduling.md) for scheduling and buffering decisions, [ADR 0003](decisions/0003-stereo-first-capture-boundary.md) for capture scope and enforcement, [ADR 0004](decisions/0004-capture-backend-selection.md) for backend evidence and implementation direction, [ADR 0005](decisions/0005-windows-capture-lifecycle-and-buffering.md) for the production Windows lifecycle and bounded handoff, and [ADR 0006](decisions/0006-capture-owner-lifecycle.md) for explicit owner/thread/shutdown responsibility.

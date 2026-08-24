@@ -3,7 +3,7 @@
 use std::error::Error;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender, TryRecvError, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -155,6 +155,259 @@ pub enum CaptureEnd {
     Failed,
 }
 
+type EventCallback = Box<dyn FnMut(StreamEvent) + Send + 'static>;
+type CaptureRunner = Box<
+    dyn FnOnce(CaptureStopToken, EventCallback) -> Result<CaptureReport, CaptureRunError>
+        + Send
+        + 'static,
+>;
+
+/// Result retained by a [`CaptureOwner`] after its worker has terminated.
+#[derive(Debug)]
+pub enum CaptureOwnerCompletion {
+    /// A stop was requested before capture initialization began.
+    StoppedBeforeStart,
+    /// Capture initialized and reached a terminal stream state.
+    Finished(CaptureReport),
+    /// Capture could not initialize or its processing path failed.
+    Failed(CaptureRunError),
+    /// The operating system could not create the owner worker.
+    StartFailed(String),
+    /// The owner worker panicked. All nested capture resources were joined while
+    /// unwinding before this completion was reported.
+    Panicked,
+}
+
+/// Outcome of the one permitted [`CaptureOwner::start`] call.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CaptureOwnerStart {
+    Started,
+    StopAlreadyRequested,
+}
+
+/// Failure to start a [`CaptureOwner`].
+#[derive(Debug)]
+pub enum CaptureOwnerStartError {
+    AlreadyStarted,
+    Spawn(std::io::Error),
+}
+
+impl fmt::Display for CaptureOwnerStartError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::AlreadyStarted => formatter.write_str("capture owner has already been started"),
+            Self::Spawn(error) => {
+                write!(formatter, "failed to spawn capture owner thread: {error}")
+            }
+        }
+    }
+}
+
+impl Error for CaptureOwnerStartError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Spawn(error) => Some(error),
+            Self::AlreadyStarted => None,
+        }
+    }
+}
+
+/// A bounded shutdown wait expired. The owner still owns the running worker,
+/// so the caller may wait again without losing the completion result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CaptureOwnerShutdownTimeout {
+    timeout: Duration,
+}
+
+impl CaptureOwnerShutdownTimeout {
+    pub const fn timeout(self) -> Duration {
+        self.timeout
+    }
+}
+
+impl fmt::Display for CaptureOwnerShutdownTimeout {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "capture owner did not stop within {:?}; ownership was retained",
+            self.timeout
+        )
+    }
+}
+
+impl Error for CaptureOwnerShutdownTimeout {}
+
+/// Explicit owner of one Windows default-playback capture run.
+///
+/// `CaptureOwner` is single-use. [`Self::start`] spawns one ordinary worker
+/// thread, and that worker owns the blocking capture operation, consumer
+/// callback, and the join obligation for the WASAPI thread. The WASAPI thread
+/// alone owns COM and endpoint resources. [`Self::request_stop`] is idempotent;
+/// [`Self::shutdown`] requests stop, waits for at most the supplied duration,
+/// joins the worker, and retains its completion state.
+///
+/// The callback runs on the owner worker, never on the WASAPI thread. It must
+/// return promptly: a blocked callback can make a shutdown wait time out. A
+/// timed-out owner remains live and must be waited again; dropping an owner is
+/// a final safety path that requests stop and joins so callbacks and resources
+/// cannot outlive the owner.
+pub struct CaptureOwner {
+    stop: CaptureStopToken,
+    runner: Option<CaptureRunner>,
+    on_event: Option<EventCallback>,
+    worker: Option<thread::JoinHandle<()>>,
+    completion_rx: Option<Receiver<CaptureOwnerCompletion>>,
+    completion: Option<CaptureOwnerCompletion>,
+    start_called: bool,
+}
+
+impl CaptureOwner {
+    /// Creates an inert owner. No thread or WASAPI resource exists until
+    /// [`Self::start`] is called.
+    pub fn new(on_event: impl FnMut(StreamEvent) + Send + 'static) -> Self {
+        Self::with_runner(on_event, |stop, mut on_event| {
+            run_default_playback_loopback(stop, &mut on_event)
+        })
+    }
+
+    fn with_runner(
+        on_event: impl FnMut(StreamEvent) + Send + 'static,
+        runner: impl FnOnce(CaptureStopToken, EventCallback) -> Result<CaptureReport, CaptureRunError>
+            + Send
+            + 'static,
+    ) -> Self {
+        Self {
+            stop: CaptureStopToken::new(),
+            runner: Some(Box::new(runner)),
+            on_event: Some(Box::new(on_event)),
+            worker: None,
+            completion_rx: None,
+            completion: None,
+            start_called: false,
+        }
+    }
+
+    /// Starts the single capture run.
+    ///
+    /// If stop was requested while the owner was inert, initialization is
+    /// skipped and completion is immediately `StoppedBeforeStart`.
+    pub fn start(&mut self) -> Result<CaptureOwnerStart, CaptureOwnerStartError> {
+        if self.start_called {
+            return Err(CaptureOwnerStartError::AlreadyStarted);
+        }
+        self.start_called = true;
+
+        if self.stop.is_stop_requested() {
+            self.runner.take();
+            self.on_event.take();
+            self.completion = Some(CaptureOwnerCompletion::StoppedBeforeStart);
+            return Ok(CaptureOwnerStart::StopAlreadyRequested);
+        }
+
+        let runner = self
+            .runner
+            .take()
+            .expect("an unstarted capture owner retains its runner");
+        let on_event = self
+            .on_event
+            .take()
+            .expect("an unstarted capture owner retains its callback");
+        let stop = self.stop.clone();
+        let (completion_tx, completion_rx) = mpsc::sync_channel(1);
+        let worker = thread::Builder::new()
+            .name("resonance-capture-owner".to_string())
+            .spawn(move || {
+                let completion =
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        runner(stop, on_event)
+                    })) {
+                        Ok(Ok(report)) => CaptureOwnerCompletion::Finished(report),
+                        Ok(Err(error)) => CaptureOwnerCompletion::Failed(error),
+                        Err(_) => CaptureOwnerCompletion::Panicked,
+                    };
+                let _ = completion_tx.send(completion);
+            });
+        let worker = match worker {
+            Ok(worker) => worker,
+            Err(error) => {
+                self.completion = Some(CaptureOwnerCompletion::StartFailed(error.to_string()));
+                return Err(CaptureOwnerStartError::Spawn(error));
+            }
+        };
+        self.worker = Some(worker);
+        self.completion_rx = Some(completion_rx);
+        Ok(CaptureOwnerStart::Started)
+    }
+
+    /// Requests normal provider shutdown. Repeating this call has no effect.
+    pub fn request_stop(&self) {
+        self.stop.request_stop();
+    }
+
+    /// Requests stop and waits for bounded completion.
+    ///
+    /// Calling this before `start` completes the owner without initializing
+    /// capture. On timeout the worker and callback remain owned by `self`.
+    pub fn shutdown(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<&CaptureOwnerCompletion, CaptureOwnerShutdownTimeout> {
+        self.request_stop();
+        if !self.start_called {
+            self.start_called = true;
+            self.runner.take();
+            self.on_event.take();
+            self.completion = Some(CaptureOwnerCompletion::StoppedBeforeStart);
+        }
+        if self.completion.is_none() {
+            let result = self
+                .completion_rx
+                .as_ref()
+                .expect("a started capture owner retains its completion receiver")
+                .recv_timeout(timeout);
+            match result {
+                Ok(completion) => {
+                    self.completion = Some(completion);
+                    self.completion_rx.take();
+                    self.join_worker();
+                }
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(CaptureOwnerShutdownTimeout { timeout });
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.completion = Some(CaptureOwnerCompletion::Panicked);
+                    self.completion_rx.take();
+                    self.join_worker();
+                }
+            }
+        }
+        Ok(self
+            .completion
+            .as_ref()
+            .expect("completed capture owner retains its result"))
+    }
+
+    /// Returns the retained completion state after successful shutdown.
+    pub const fn completion(&self) -> Option<&CaptureOwnerCompletion> {
+        self.completion.as_ref()
+    }
+
+    fn join_worker(&mut self) {
+        if let Some(worker) = self.worker.take() {
+            if worker.join().is_err() {
+                self.completion = Some(CaptureOwnerCompletion::Panicked);
+            }
+        }
+    }
+}
+
+impl Drop for CaptureOwner {
+    fn drop(&mut self) {
+        self.request_stop();
+        self.join_worker();
+    }
+}
+
 /// Captures the default playback endpoint until `stop` is requested or a
 /// stream boundary occurs.
 ///
@@ -200,11 +453,43 @@ fn run_capture(
         .spawn(move || capture_thread(limit, capture_stop, capture_tx))
         .map_err(CaptureRunError::Spawn)?;
 
+    let capture_thread = CaptureThread {
+        stop: stop.clone(),
+        handle: Some(handle),
+    };
+
     let result = process_capture(capture_rx, stop, on_event);
-    handle
-        .join()
-        .map_err(|_| CaptureRunError::CaptureThreadPanicked)?;
+    if result.is_err() {
+        capture_thread.stop.request_stop();
+    }
+    capture_thread.join()?;
     result
+}
+
+struct CaptureThread {
+    stop: CaptureStopToken,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl CaptureThread {
+    fn join(mut self) -> Result<(), CaptureRunError> {
+        let handle = self
+            .handle
+            .take()
+            .expect("capture thread is joined exactly once");
+        handle
+            .join()
+            .map_err(|_| CaptureRunError::CaptureThreadPanicked)
+    }
+}
+
+impl Drop for CaptureThread {
+    fn drop(&mut self) {
+        self.stop.request_stop();
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 fn process_capture(
@@ -1034,6 +1319,40 @@ impl Error for CaptureRunError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::Mutex;
+
+    struct DropCounter(Arc<AtomicUsize>);
+
+    impl Drop for DropCounter {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    fn fake_report(end: CaptureEnd) -> CaptureReport {
+        CaptureReport {
+            endpoint_name: "fake endpoint".to_string(),
+            native_sample_rate_hz: 48_000,
+            native_channel_count: 2,
+            output_sample_rate_hz: 48_000,
+            output_channel_count: 2,
+            maximum_packet_frames: 480,
+            packet_count: 0,
+            audio_frame_count: 0,
+            source_frame_count: 0,
+            minimum_packet_frames: None,
+            maximum_observed_packet_frames: None,
+            minimum_callback_interval: None,
+            maximum_callback_interval: None,
+            maximum_callback_duration: None,
+            minimum_qpc_delta: None,
+            maximum_qpc_delta: None,
+            initial_discontinuity_observed: false,
+            end,
+            end_diagnostic: None,
+        }
+    }
 
     fn packet(frame_index: u64, qpc_timestamp_100ns: u64) -> CapturePacket {
         let samples = [0.25_f32, -0.25_f32];
@@ -1084,6 +1403,210 @@ mod tests {
         let mut on_event = |event| events.push(event);
         let report = process_capture(capture_rx, CaptureStopToken::new(), &mut on_event).unwrap();
         (report, events)
+    }
+
+    #[test]
+    fn owner_start_creates_one_worker_and_rejects_a_second_start() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let mut owner = CaptureOwner::with_runner(
+            |_| {},
+            move |stop, _| {
+                started_tx.send(()).unwrap();
+                while !stop.is_stop_requested() {
+                    thread::yield_now();
+                }
+                Ok(fake_report(CaptureEnd::StopRequested))
+            },
+        );
+
+        assert_eq!(owner.start().unwrap(), CaptureOwnerStart::Started);
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(matches!(
+            owner.start(),
+            Err(CaptureOwnerStartError::AlreadyStarted)
+        ));
+        assert!(matches!(
+            owner.shutdown(Duration::from_secs(1)).unwrap(),
+            CaptureOwnerCompletion::Finished(CaptureReport {
+                end: CaptureEnd::StopRequested,
+                ..
+            })
+        ));
+        assert!(owner.worker.is_none());
+    }
+
+    #[test]
+    fn stop_before_start_skips_initialization_and_is_idempotent() {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let runner_runs = runs.clone();
+        let mut owner = CaptureOwner::with_runner(
+            |_| {},
+            move |_, _| {
+                runner_runs.fetch_add(1, Ordering::SeqCst);
+                Ok(fake_report(CaptureEnd::StopRequested))
+            },
+        );
+
+        owner.request_stop();
+        owner.request_stop();
+        assert_eq!(
+            owner.start().unwrap(),
+            CaptureOwnerStart::StopAlreadyRequested
+        );
+        assert!(matches!(
+            owner.shutdown(Duration::ZERO).unwrap(),
+            CaptureOwnerCompletion::StoppedBeforeStart
+        ));
+        assert_eq!(runs.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn shutdown_before_start_is_a_completed_stop() {
+        let mut owner = CaptureOwner::with_runner(|_| {}, |_, _| unreachable!());
+
+        assert!(matches!(
+            owner.shutdown(Duration::ZERO).unwrap(),
+            CaptureOwnerCompletion::StoppedBeforeStart
+        ));
+        assert!(matches!(
+            owner.start(),
+            Err(CaptureOwnerStartError::AlreadyStarted)
+        ));
+    }
+
+    #[test]
+    fn shutdown_waits_for_resource_release_and_thread_completion() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let runner_drops = drops.clone();
+        let mut owner = CaptureOwner::with_runner(
+            |_| {},
+            move |stop, _| {
+                let _resource = DropCounter(runner_drops);
+                while !stop.is_stop_requested() {
+                    thread::yield_now();
+                }
+                Ok(fake_report(CaptureEnd::StopRequested))
+            },
+        );
+
+        owner.start().unwrap();
+        owner.request_stop();
+        owner.request_stop();
+        let completion = owner.shutdown(Duration::from_secs(1)).unwrap();
+
+        assert!(matches!(completion, CaptureOwnerCompletion::Finished(_)));
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+        assert!(owner.worker.is_none());
+        assert!(owner.completion().is_some());
+    }
+
+    #[test]
+    fn dropping_a_started_owner_requests_stop_and_joins_resources() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        let runner_drops = drops.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let mut owner = CaptureOwner::with_runner(
+            |_| {},
+            move |stop, _| {
+                let _resource = DropCounter(runner_drops);
+                started_tx.send(()).unwrap();
+                while !stop.is_stop_requested() {
+                    thread::yield_now();
+                }
+                Ok(fake_report(CaptureEnd::StopRequested))
+            },
+        );
+        owner.start().unwrap();
+        started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+
+        drop(owner);
+
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn nested_capture_thread_guard_requests_stop_and_joins_resources() {
+        let stop = CaptureStopToken::new();
+        let thread_stop = stop.clone();
+        let drops = Arc::new(AtomicUsize::new(0));
+        let thread_drops = drops.clone();
+        let handle = thread::spawn(move || {
+            let _resource = DropCounter(thread_drops);
+            while !thread_stop.is_stop_requested() {
+                thread::yield_now();
+            }
+        });
+        let capture_thread = CaptureThread {
+            stop,
+            handle: Some(handle),
+        };
+
+        drop(capture_thread);
+
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn shutdown_timeout_retains_worker_ownership_for_a_later_wait() {
+        let release = Arc::new(AtomicBool::new(false));
+        let runner_release = release.clone();
+        let mut owner = CaptureOwner::with_runner(
+            |_| {},
+            move |_, _| {
+                while !runner_release.load(Ordering::Acquire) {
+                    thread::yield_now();
+                }
+                Ok(fake_report(CaptureEnd::StopRequested))
+            },
+        );
+        owner.start().unwrap();
+
+        let timeout = owner.shutdown(Duration::from_millis(1)).unwrap_err();
+        assert_eq!(timeout.timeout(), Duration::from_millis(1));
+        assert!(owner.worker.is_some());
+        assert!(owner.completion().is_none());
+
+        release.store(true, Ordering::Release);
+        assert!(matches!(
+            owner.shutdown(Duration::from_secs(1)).unwrap(),
+            CaptureOwnerCompletion::Finished(_)
+        ));
+        assert!(owner.worker.is_none());
+    }
+
+    #[test]
+    fn owner_preserves_stream_event_order_and_ends_callbacks_before_completion() {
+        let event_kinds = Arc::new(Mutex::new(Vec::new()));
+        let callback_event_kinds = event_kinds.clone();
+        let mut owner = CaptureOwner::with_runner(
+            move |event| {
+                let kind = match event {
+                    StreamEvent::Started(_) => "started",
+                    StreamEvent::Data(_) => "data",
+                    StreamEvent::Error(_) => "error",
+                    StreamEvent::Ended { .. } => "ended",
+                    _ => "other",
+                };
+                callback_event_kinds.lock().unwrap().push(kind);
+            },
+            |_, mut on_event| {
+                let (report, events) = run_fake_stream();
+                for event in events {
+                    on_event(event);
+                }
+                Ok(report)
+            },
+        );
+
+        owner.start().unwrap();
+        assert!(matches!(
+            owner.shutdown(Duration::from_secs(1)).unwrap(),
+            CaptureOwnerCompletion::Finished(_)
+        ));
+        assert_eq!(
+            *event_kinds.lock().unwrap(),
+            ["started", "data", "data", "ended"]
+        );
     }
 
     #[test]

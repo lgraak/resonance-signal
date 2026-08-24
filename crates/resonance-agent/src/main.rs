@@ -2,7 +2,8 @@
 
 #[cfg(windows)]
 fn main() {
-    use resonance_agent::windows::run_default_playback_loopback_for;
+    use resonance_agent::windows::{CaptureOwner, CaptureOwnerCompletion, CaptureOwnerStart};
+    use std::time::Duration;
 
     let duration = match parse_duration(std::env::args().skip(1)) {
         Ok(Some(duration)) => duration,
@@ -13,14 +14,44 @@ fn main() {
         }
     };
 
-    match run_default_playback_loopback_for(duration, print_lifecycle_event) {
-        Ok(report) => println!("{report}"),
+    let mut owner = CaptureOwner::new(print_lifecycle_event);
+    match owner.start() {
+        Ok(CaptureOwnerStart::Started) => {}
+        Ok(CaptureOwnerStart::StopAlreadyRequested) => {
+            eprintln!("capture owner stopped before startup");
+            std::process::exit(1);
+        }
         Err(error) => {
+            eprintln!("Windows playback-loopback owner failed to start: {error}");
+            std::process::exit(1);
+        }
+    }
+
+    std::thread::sleep(duration);
+    match owner.shutdown(Duration::from_secs(2)) {
+        Ok(CaptureOwnerCompletion::Finished(report)) => println!("{report}"),
+        Ok(CaptureOwnerCompletion::Failed(error)) => {
             eprintln!(
                 "Windows playback-loopback capture failed: kind={:?}, retry={:?}, message={error}",
                 error.kind(),
                 error.retry_hint()
             );
+            std::process::exit(1);
+        }
+        Ok(CaptureOwnerCompletion::StoppedBeforeStart) => {
+            eprintln!("capture owner stopped before startup");
+            std::process::exit(1);
+        }
+        Ok(CaptureOwnerCompletion::StartFailed(message)) => {
+            eprintln!("Windows playback-loopback owner failed to start: {message}");
+            std::process::exit(1);
+        }
+        Ok(CaptureOwnerCompletion::Panicked) => {
+            eprintln!("Windows playback-loopback owner panicked");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("Windows playback-loopback owner shutdown failed: {error}");
             std::process::exit(1);
         }
     }

@@ -69,9 +69,21 @@
 - Added hardware-independent tests for CLI validation, lifecycle/error mapping, bounded handoff delivery, explicit overload, and stream restart identity/timeline behavior.
 - Preserved explicit owner-controlled restart; automatic reconnect remains deferred.
 
+## Milestone 6A: Capture owner lifecycle
+
+- Added an inert, single-use `CaptureOwner` with explicit startup, idempotent stop requests, bounded shutdown waiting, retained completion state, and joined cleanup.
+- Assigned one unambiguous ownership chain: the public owner owns the ordinary worker, the worker owns provider callbacks and the WASAPI-thread join obligation, and the WASAPI thread owns all COM and endpoint resources.
+- Made pre-start stop skip initialization, made a second start invalid, and retained worker ownership after a shutdown timeout so callers can safely wait again.
+- Ensured successful shutdown and the drop fallback join all nested work before callbacks or capture resources can outlive the owner.
+- Preserved existing `Started`, `Data`, `Error`, and `Ended` ordering and the new-stream identity/frame-index/timeline rules for later explicit runs.
+- Added hardware-independent lifecycle tests for startup, stop-before-start, repeated stop, timeout/retry, completion, resource release, drop cleanup, event order, and restart semantics.
+- Updated the diagnostic executable to exercise the long-running owner and explicit shutdown on real Windows capture.
+- Validated that path on Windows 11 against Headphones (WH-1000XM5): 96 kHz stereo capture emitted 1,000 data frames over ten seconds, then joined with `ProviderShutdown` / `StopRequested`; observed WASAPI QPC deltas remained approximately 10 ms.
+- Kept automatic reconnect, retry/backoff, and default-device following deferred to a separate milestone.
+
 ## Later milestones
 
-- Define and validate the first long-running capture owner, including reconnect policy and controlled endpoint-replacement acceptance, without selecting transport prematurely.
+- Define and validate reconnect ownership, retry/backoff, and controlled endpoint-replacement acceptance around the completed single-run owner without selecting transport prematurely.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
