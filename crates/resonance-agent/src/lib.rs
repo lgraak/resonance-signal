@@ -2,6 +2,8 @@
 
 pub mod capture;
 
+pub(crate) mod recovery;
+
 #[cfg(windows)]
 pub mod supervisor;
 

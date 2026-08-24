@@ -164,7 +164,11 @@ Every owner event remains visible to consumers. The supervisor records typed err
 
 Replacement eligibility is only a recorded mechanical boundary: desired-running intent is still enabled, an `Ended` event was delivered, owner completion was received, and resources were released. No supervisor method consumes that eligibility or creates another owner, including after normal completion, capture failure, startup failure, or panic.
 
-The recovery decision model fails closed. Explicit stop first invalidates the running-intent generation and any pending authorization, then joins cleanup; late events remain visible but cannot reactivate recovery. Device loss, reconfiguration, interruption, and resource exhaustion are only conditionally recoverable. Unsupported format under unchanged conditions, unclassified startup failure, and worker panic remain stopped. Retry hints constrain policy but never command it. Future attempt counts, cooldowns, backoff, source evidence, and reset state belong to the supervisor, while a pure policy evaluation returns remain-stopped, wait, or permit-replacement. No timer, watcher, reconnect, or replacement exists. See [ADR 0007](decisions/0007-capture-supervisor-boundary.md) and [ADR 0008](decisions/0008-recovery-policy-boundary.md).
+The agent-internal recovery representation separates `RecoveryContext`, `RecoveryCause`, and `RecoveryEvidence` from `RecoveryDecision`. Its pure evaluator implements the ADR 0008 precedence order and returns a stable reason with remain-stopped, wait, or permit-replacement. Explicit stop and stale intent win before lifecycle checks. A started stream requires its terminal event, joined owner completion, and resource release; a startup attempt requires joined completion and release but no stream terminal event. Missing or inconsistent structured evidence fails closed.
+
+Device removal and invalidation require future availability evidence. Default-endpoint replacement requires follow-default policy and a resolved replacement, while format reconfiguration requires a supported fresh format. Interruption requires compatible retry guidance and budget, and resource exhaustion additionally requires completed cooldown and pressure-clear evidence. Unsupported format under unchanged conditions, broad internal failure, unclassified startup failure, and worker panic remain stopped. Retry hints constrain policy but never command it. The representation accepts retry-state snapshots but selects no timing, backoff, or limit values.
+
+The evaluator is not wired into `CaptureSupervisor`; a permit-replacement result is data, not recovery execution. It does not create or stop an owner, mutate state, access hardware, wait, sleep, or register notifications. No timer, watcher, reconnect, or replacement exists. See [ADR 0007](decisions/0007-capture-supervisor-boundary.md) and [ADR 0008](decisions/0008-recovery-policy-boundary.md).
 
 A future replacement would still require a new `StreamId`, frame index zero, and stream time zero; the supervisor cannot conceal the prior `Error`/`Ended` transition or synthesize continuity. Consumers observe lifecycle facts and platform-neutral errors, not policy state, attempt counts, or parsed diagnostics.
 
@@ -209,7 +213,7 @@ Future products remain separate branches from the waveform input. A later `Spect
 
 ## Current constraints
 
-- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner and a recovery-disabled supervisor in `resonance-agent`; its recovery decision policy is documented but no reconnecting service, retry mechanism, replacement behavior, or service installation exists.
+- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner and a recovery-disabled supervisor in `resonance-agent`; its decision-only recovery policy is represented and tested but is not invoked or enforced, and no reconnecting service, retry mechanism, replacement behavior, or service installation exists.
 - Windows microphone capture and all Linux capture remain unimplemented.
 - Supported future capture output is limited to mono and two-channel stereo; wider, spatial, and object-based formats are rejected unless the platform supplies a valid mono/stereo representation.
 - Custom downmixing and silent first-two-channel extraction are prohibited.

@@ -113,9 +113,18 @@
 - Preserved independent replacement streams with a new `StreamId`, frame index zero, stream-relative time zero, and fully visible terminal/start lifecycle boundaries.
 - Kept reconnect, replacement owner creation, retry scheduling, endpoint watching, default-device following, and all runtime capture behavior unimplemented.
 
+## Milestone 6E: Recovery policy representation
+
+- Added agent-internal `RecoveryContext`, stable recovery causes, explicit lifecycle/source/retry evidence, and reasoned remain-stopped, wait, or permit-replacement decisions.
+- Implemented ADR 0008 precedence as a deterministic pure evaluator: explicit stop and stale intent win, incomplete lifecycle waits, and missing or inconsistent structured evidence fails closed.
+- Represented conditional device availability, default-source replacement, fresh format, interruption budget/cooldown, and resource-pressure inputs without selecting timer, retry-count, or backoff values.
+- Kept unsupported format under unchanged conditions, broad internal failure, coarse startup failure, worker panic, normal shutdown, exhausted budget, and retry vetoes stopped.
+- Added hardware-independent tests for every ADR 0008 outcome row, precedence rule, evidence gap, guarded permission, and the decision-versus-action boundary.
+- Kept the policy disconnected from `CaptureSupervisor`; reconnect, retry execution, timers, owner replacement, endpoint watching, default-device following, and service behavior remain unimplemented.
+
 ## Later milestones
 
-- Define structured recovery-cause evidence needed by the guarded policy rows, then implement and validate bounded retry/backoff policy without endpoint watchers or replacement capture unless separately approved.
+- Define and validate concrete bounded retry/backoff values and supervisor-owned mutable retry state without endpoint watchers or replacement capture unless separately approved.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
