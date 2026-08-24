@@ -3,6 +3,7 @@
 pub mod capture;
 
 pub(crate) mod recovery;
+pub(crate) mod retry_state;
 
 #[cfg(windows)]
 pub mod supervisor;

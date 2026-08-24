@@ -132,9 +132,19 @@
 - Required one-shot authorization bound to intent generation, recovery episode, state revision, and prior attempt identity, with explicit stop, no-overlap ownership, budget limits, typed failure classification, and fail-closed evidence preventing recovery storms.
 - Deferred every numeric limit and timing value, configuration source, persistence rule, timer, watcher, reconnect, and replacement owner.
 
+## Milestone 6G: Retry state representation and transition model
+
+- Added an agent-internal, supervisor-owned retry-state component with explicit `Idle`, `Attempting`, `Running`, `Failed`, `Waiting`, `Exhausted`, and `Stopped` phases.
+- Added nonzero intent generations, monotonic attempt identities, distinct total-attempt and automatic-recovery counters, typed attempt lifecycle facts, and state revisions that reject stale evaluated snapshots.
+- Added recovery episodes with sticky exhaustion and explicit typed reset evidence; a successful owner start does not reset the episode or retry accounting.
+- Added bounded recent typed failure history, last-failure evidence, aggregate failure counters, and checked transitions that do not partially mutate state when a counter is exhausted.
+- Represented cooldown as pending, satisfied, invalidated, or not required using opaque evidence identities, without selecting or reading time.
+- Added transition-table tests for intent invalidation, once-only attempt accounting, episode reset and exhaustion, bounded history, cooldown gating, immutable policy evaluation, and terminal/cleanup ordering.
+- Kept the state model disconnected from the runtime `CaptureSupervisor`; it has no capture factory, device knowledge, timer, thread, event sink, reconnect, or replacement behavior.
+
 ## Later milestones
 
-- Implement agent-internal retry configuration and supervisor-owned mutable retry-state representation with hardware-independent transition tests, without timers, endpoint watchers, reconnect, or replacement capture unless separately approved.
+- Define agent-internal retry configuration and integrate state accounting into `CaptureSupervisor` without enabling timers, endpoint watchers, reconnect, or replacement capture unless separately approved.
 - Select and validate concrete retry/backoff values only from operational evidence in a separately scoped milestone.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.

@@ -168,11 +168,33 @@ The agent-internal recovery representation separates `RecoveryContext`, `Recover
 
 Device removal and invalidation require future availability evidence. Default-endpoint replacement requires follow-default policy and a resolved replacement, while format reconfiguration requires a supported fresh format. Interruption requires compatible retry guidance and budget, and resource exhaustion additionally requires completed cooldown and pressure-clear evidence. Unsupported format under unchanged conditions, broad internal failure, unclassified startup failure, and worker panic remain stopped. Retry hints constrain policy but never command it. The representation accepts retry-state snapshots but selects no timing, backoff, or limit values.
 
-The retry-state design gives each explicit start a new intent generation and each owner-creation call a monotonic attempt identity within that generation. The supervisor increments attempt state immediately before owner creation, so construction and startup failures consume an attempt. Total attempts and automatic recovery attempts are distinct counters. A `Started` event alone cannot reset recovery state; only a new explicit intent or a future configured stable-run rule can begin a fresh recovery episode. The supervisor also owns bounded typed history, last failure, cooldown eligibility, exhaustion, and a state revision that invalidates previously evaluated snapshots.
+The implemented retry-state component gives each explicit start a new intent generation and each committed owner-creation call a monotonic attempt identity within that generation. Its transition model is:
 
-Cooldown is represented as supervisor-owned eligibility state in a monotonic time domain, not as a sleeping policy evaluator. Future deterministic backoff calculation may use configured growth, caps, and an explicit jitter sample, but no values or algorithms are selected. A policy authorization binds to intent generation, recovery episode, state revision, and prior attempt identity and can be consumed at most once. Explicit stop, exhaustion, missing evidence, an active owner, pending cooldown, or a stale binding prevents execution.
+```text
+Idle --commit attempt--> Attempting --Started--> Running
+                              |                    |
+                              +------failure------+--> Failed
+                                                       |
+                                      terminal evidence + joined cleanup
+                                                       |
+                                                       v
+                                                    Waiting
+                                                    /     \
+                                    commit recovery       exhaust
+                                           |                 |
+                                           v                 v
+                                      Attempting          Exhausted
 
-The evaluator is not wired into `CaptureSupervisor`; a permit-replacement result is data, not recovery execution. The documented retry fields do not yet exist in runtime state. The policy does not create or stop an owner, mutate state, access hardware, wait, sleep, or register notifications. No timer, watcher, reconnect, or replacement exists. See [ADR 0007](decisions/0007-capture-supervisor-boundary.md), [ADR 0008](decisions/0008-recovery-policy-boundary.md), and [ADR 0009](decisions/0009-retry-state-and-policy-boundary.md).
+explicit stop from any current state --> Stopped
+```
+
+Construction, startup, `Started`, terminal failure, terminal delivery, and cleanup remain facts on one attempt and cannot increment it twice. Total attempts and automatic recovery attempts are distinct counters. A `Started` event alone does not reset recovery state; only a new explicit intent or explicit already-validated stable-run/changed-precondition evidence advances an episode. Recent typed failure records are structurally bounded while last-failure and aggregate counts survive eviction.
+
+An immutable retry snapshot owns the facts evaluated by policy and binds intent generation, recovery episode, state revision, configuration identity, and prior attempt identity. A recovery-attempt transition accepts only a still-current snapshot; every intervening state mutation invalidates it. Exhaustion is sticky within an episode, and a new episode requires explicit typed reset evidence. Checked counters and revisions are calculated before mutation so a rejected transition does not leave partially updated state.
+
+Cooldown is represented as `NotRequired`, `Pending`, `Satisfied`, or `Invalidated`, correlated by opaque eligibility and satisfaction evidence. It does not contain a clock, deadline, duration, timer, or sleep. Satisfying cooldown only updates evidence; it does not allocate an attempt.
+
+The retry state and evaluator are not wired into the runtime `CaptureSupervisor`; a permit-replacement result and a committed attempt identity are data, not recovery execution. The state module has no owner factory, device integration, event sink, clock, thread, or scheduling mechanism. No timer, watcher, reconnect, or replacement exists. See [ADR 0007](decisions/0007-capture-supervisor-boundary.md), [ADR 0008](decisions/0008-recovery-policy-boundary.md), and [ADR 0009](decisions/0009-retry-state-and-policy-boundary.md).
 
 A future replacement would still require a new `StreamId`, frame index zero, and stream time zero; the supervisor cannot conceal the prior `Error`/`Ended` transition or synthesize continuity. Consumers observe lifecycle facts and platform-neutral errors, not policy state, attempt counts, or parsed diagnostics.
 
@@ -217,7 +239,7 @@ Future products remain separate branches from the waveform input. A later `Spect
 
 ## Current constraints
 
-- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner and a recovery-disabled supervisor in `resonance-agent`; its decision-only recovery policy is represented and tested, and its retry-state/configuration boundary is designed, but neither is invoked or represented in supervisor runtime state. No reconnecting service, retry mechanism, replacement behavior, or service installation exists.
+- The Windows default-playback loopback capture boundary has a single-use, lifecycle-managed owner and a recovery-disabled supervisor in `resonance-agent`; its decision-only recovery policy and deterministic retry transition model are represented and tested, but neither is invoked by supervisor runtime execution. No reconnecting service, retry mechanism, replacement behavior, or service installation exists.
 - Windows microphone capture and all Linux capture remain unimplemented.
 - Supported future capture output is limited to mono and two-channel stereo; wider, spatial, and object-based formats are rejected unless the platform supplies a valid mono/stereo representation.
 - Custom downmixing and silent first-two-channel extraction are prohibited.
