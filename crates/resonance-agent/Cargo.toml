@@ -8,6 +8,11 @@ description = "Executable entry point for Resonance Signal"
 
 [dependencies]
 resonance-api = { path = "../resonance-api" }
+resonance-core = { path = "../resonance-core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
 
 [target.'cfg(windows)'.dependencies]
+axum = { version = "0.8", features = ["json", "query", "ws"] }
+tokio = { version = "1.47", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 wasapi = "=0.24.0"

@@ -62,7 +62,7 @@ Explicit Source means “capture the source identified by this opaque provider-a
 - If the same source returns and its identity can still be proven, a later attempt may resolve it and begins a new stream.
 - If identity continuity cannot be proven, the provider must require rediscovery and a new explicit intent rather than guess.
 
-The existing `Id(SourceId)` selector represents this intent at the consumer-contract boundary. Windows discovery and runtime explicit-source capture are implemented; consumer transport remains deferred.
+The existing `Id(SourceId)` selector represents this intent at the consumer-contract boundary. Windows discovery, runtime explicit-source capture, and the v1 local consumer transport implement this intent without substitution.
 
 ## Source Identity Model
 
@@ -180,7 +180,7 @@ This alternative is selected.
 
 - Source discovery representation and durable identity scope are defined by ADR 0014, but enumeration and mapping persistence are not implemented.
 - Current Windows runtime exposes only default-playback capture and does not execute replacement or follow-default recovery.
-- Current Windows runtime reports the provider-mapped resolved endpoint `SourceId` for both Default Playback and identity-pinned Explicit Source capture; consumer transport remains unavailable.
+- Current Windows runtime and v1 local transport report the provider-mapped resolved endpoint `SourceId` for both Default Playback and identity-pinned Explicit Source capture.
 - Exact equivalence between native identities across device removal, re-enumeration, process restart, or operating-system changes is platform-specific and unresolved.
 - Consumers must handle new stream identities whenever capture resumes, even if the same source returns.
 
@@ -199,7 +199,7 @@ No current Rust source, dependency, or runtime behavior changes as a result of t
 - Linux PipeWire implementation and validation;
 - recovery behavior, endpoint watching, wait/retry timing, owner replacement, and default-follow execution;
 - microphone-default intent and whether it needs policy distinct from playback;
-- transport and serialization representation of selection and identity.
+- non-loopback security and authorization for selection and identity.
 
 ## Documentation Updates
 

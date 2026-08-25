@@ -2,17 +2,37 @@
 
 #[cfg(windows)]
 fn main() {
+    if let Err(message) = dispatch(std::env::args().skip(1)) {
+        eprintln!("{message}");
+        std::process::exit(1);
+    }
+}
+
+#[cfg(windows)]
+fn dispatch(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+    match args.next() {
+        Some(command) if command == "serve" => match parse_serve_options(args)? {
+            Some(config) => resonance_agent::transport::run(config),
+            None => Ok(()),
+        },
+        Some(command) if command == "capture" => run_diagnostic(parse_options(args)?),
+        Some(command) if command == "--help" || command == "-h" => {
+            print_help();
+            Ok(())
+        }
+        Some(argument) => run_diagnostic(parse_options(std::iter::once(argument).chain(args))?),
+        None => run_diagnostic(parse_options(std::iter::empty())?),
+    }
+}
+
+#[cfg(windows)]
+fn run_diagnostic(options: Option<DiagnosticOptions>) -> Result<(), String> {
     use resonance_agent::supervisor::{CaptureSupervisor, CaptureSupervisorStart};
     use resonance_agent::windows::CaptureOwnerCompletion;
     use std::time::Duration;
 
-    let options = match parse_options(std::env::args().skip(1)) {
-        Ok(Some(options)) => options,
-        Ok(None) => return,
-        Err(message) => {
-            eprintln!("{message}");
-            std::process::exit(1);
-        }
+    let Some(options) = options else {
+        return Ok(());
     };
 
     let mut supervisor =
@@ -20,19 +40,20 @@ fn main() {
     match supervisor.start() {
         Ok(CaptureSupervisorStart::Started) => {}
         Ok(CaptureSupervisorStart::StoppedBeforeStart) => {
-            eprintln!("capture supervisor stopped before startup");
-            std::process::exit(1);
+            return Err("capture supervisor stopped before startup".to_string());
         }
         Err(error) => {
-            eprintln!("Windows playback-loopback supervisor failed to start: {error}");
-            std::process::exit(1);
+            return Err(format!(
+                "Windows playback-loopback supervisor failed to start: {error}"
+            ));
         }
     }
 
     std::thread::sleep(options.duration);
     if let Err(error) = supervisor.stop(Duration::from_secs(2)) {
-        eprintln!("Windows playback-loopback supervisor shutdown failed: {error}");
-        std::process::exit(1);
+        return Err(format!(
+            "Windows playback-loopback supervisor shutdown failed: {error}"
+        ));
     }
     match supervisor
         .owner_completion()
@@ -40,26 +61,77 @@ fn main() {
     {
         CaptureOwnerCompletion::Finished(report) => println!("{report}"),
         CaptureOwnerCompletion::Failed(error) => {
-            eprintln!(
+            return Err(format!(
                 "Windows playback-loopback capture failed: kind={:?}, retry={:?}, message={error}",
                 error.kind(),
                 error.retry_hint()
-            );
-            std::process::exit(1);
+            ));
         }
         CaptureOwnerCompletion::StoppedBeforeStart => {
-            eprintln!("capture owner stopped before startup");
-            std::process::exit(1);
+            return Err("capture owner stopped before startup".to_string());
         }
         CaptureOwnerCompletion::StartFailed(message) => {
-            eprintln!("Windows playback-loopback owner failed to start: {message}");
-            std::process::exit(1);
+            return Err(format!(
+                "Windows playback-loopback owner failed to start: {message}"
+            ));
         }
         CaptureOwnerCompletion::Panicked => {
-            eprintln!("Windows playback-loopback owner panicked");
-            std::process::exit(1);
+            return Err("Windows playback-loopback owner panicked".to_string());
         }
     }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn parse_serve_options(
+    mut args: impl Iterator<Item = String>,
+) -> Result<Option<resonance_agent::transport::AgentServiceConfig>, String> {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+    let mut host = IpAddr::V4(Ipv4Addr::LOCALHOST);
+    let mut port = 48_480_u16;
+    let mut host_seen = false;
+    let mut port_seen = false;
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--host" if !host_seen => {
+                host_seen = true;
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--host requires 127.0.0.1 or ::1".to_string())?;
+                host = value
+                    .parse()
+                    .map_err(|_| format!("invalid numeric listener address {value:?}"))?;
+            }
+            "--port" if !port_seen => {
+                port_seen = true;
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--port requires a value".to_string())?;
+                port = value
+                    .parse::<u16>()
+                    .map_err(|_| format!("invalid port {value:?}"))?;
+                if port == 0 {
+                    return Err("service port must be between 1 and 65535".to_string());
+                }
+            }
+            "--help" | "-h" => {
+                print_help();
+                return Ok(None);
+            }
+            "--host" => return Err("--host was supplied more than once".to_string()),
+            "--port" => return Err("--port was supplied more than once".to_string()),
+            _ => return Err(format!("unknown serve argument {argument:?}")),
+        }
+    }
+    resonance_agent::transport::AgentServiceConfig::new(SocketAddr::new(host, port)).map(Some)
+}
+
+#[cfg(windows)]
+fn print_help() {
+    println!(
+        "Usage:\n  resonance-agent serve [--host 127.0.0.1|::1] [--port <1..=65535>]\n  resonance-agent capture [--duration-seconds <1..=3600>] [--source-id <opaque-id>]"
+    );
 }
 
 #[cfg(windows)]
@@ -108,7 +180,7 @@ fn parse_options(
         match argument.as_str() {
             "--help" | "-h" => {
                 println!(
-                    "Usage: resonance-agent [--duration-seconds <1..=3600>] [--source-id <opaque-id>]"
+                    "Usage: resonance-agent capture [--duration-seconds <1..=3600>] [--source-id <opaque-id>]"
                 );
                 return Ok(None);
             }

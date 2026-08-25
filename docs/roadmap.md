@@ -267,6 +267,15 @@
 - Added a narrow diagnostic `--source-id <opaque-id>` option, hardware-independent identity/binding tests, and real Arrakis validation for Default Playback, explicit repeat capture, and unknown-ID rejection.
 - Kept endpoint watching, automatic migration or recovery, transport, UI, microphone discovery, and PipeWire deferred.
 
+## Milestone 6U: Local consumer agent and waveform transport
+
+- Added long-running `resonance-agent serve` mode with loopback-only `/v1/status`, `/v1/sources`, and `/v1/waveform` HTTP/WebSocket operations.
+- Kept Default Playback as attempt-time role intent and Explicit Source as exact opaque identity with no substitution; every WebSocket capture receives an independent supervisor, fresh `StreamId`, and zero-based timeline.
+- Mapped scheduled mono/stereo waveform windows to a versioned 40-byte little-endian header plus interleaved finite `f32` payload; JSON carries portable stream metadata, lifecycle, errors, and exact stop control.
+- Added bounded 16-item per-client queues, a 16-session process limit, non-blocking capture-to-network handoff, two-second socket write deadlines, malformed-input limits, deterministic cleanup, and independent-session behavior.
+- Added consumer-complete protocol documentation, a dependency-free external Python diagnostic, focused transport tests, and ADR 0016.
+- Kept InfoPanel, browser UI, persistent consumer configuration, endpoint watching, automatic migration/recovery, Windows SCM installation, microphone/PipeWire, LAN listening, authentication, and TLS out of scope.
+
 ## Later milestones
 
 - Execute the accepted measurement plan, collect representative operational evidence, and review candidate failure classes without enabling recovery.
@@ -274,6 +283,6 @@
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
-- Define an appropriate client transport only when contract requirements justify it.
+- Design non-loopback security only in a separate milestone that explicitly covers authentication, authorization, transport protection, abuse controls, and deployment behavior.
 
 Consumer applications and visualization remain outside this roadmap and repository.

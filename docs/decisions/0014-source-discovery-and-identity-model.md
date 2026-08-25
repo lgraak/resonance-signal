@@ -247,7 +247,7 @@ The original design milestone changed no runtime behavior. Milestone 6Q subseque
 - UI and consumer presentation, sorting, grouping, and source selection flows;
 - authorization, source visibility, permission prompts, and multi-user identity domains;
 - capability negotiation and format preflight in discovery;
-- transport and serialization representation;
+- discovery change delivery, paging, and non-loopback authorization;
 - endpoint watching, retry timing, replacement-owner creation, and recovery execution.
 
 ## Documentation Updates

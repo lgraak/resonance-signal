@@ -5,13 +5,13 @@ use std::fmt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use resonance_api::contract::{
-    ErrorKind, ErrorScope, ProviderError, RetryHint, SignalPacket, SignalPayload, SourceId,
-    SourceKind, StreamDescriptor, StreamEndReason, StreamEvent, StreamId,
+    DiscoverySnapshot, ErrorKind, ErrorScope, ProviderError, RetryHint, SignalPacket,
+    SignalPayload, SourceId, SourceKind, StreamDescriptor, StreamEndReason, StreamEvent, StreamId,
 };
 use wasapi::{
     deinitialize, initialize_mta, DeviceEventCallbacks, DeviceState, Direction, DisconnectReason,
@@ -34,6 +34,31 @@ const END_INTERRUPTED: u8 = 3;
 const AUDCLNT_E_DEVICE_INVALIDATED: i32 = 0x8889_0004_u32 as i32;
 
 static STREAM_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+static DISCOVERY_ACCESS: Mutex<()> = Mutex::new(());
+
+fn lock_discovery_access() -> MutexGuard<'static, ()> {
+    DISCOVERY_ACCESS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Returns one portable playback-source snapshot without exposing native
+/// endpoint or registry identity.
+pub fn discover_playback_sources() -> Result<DiscoverySnapshot, String> {
+    let _access = lock_discovery_access();
+    initialize_mta()
+        .ok()
+        .map_err(|error| format!("failed to initialize source discovery: {error}"))?;
+    let _com = ComGuard;
+    let storage = default_identity_registry_directory().map_err(|error| error.message)?;
+    let mut discovery = PlaybackDiscovery::new(storage, WindowsPlaybackEndpointSource::new())
+        .map_err(|error| error.to_string())?;
+    discovery
+        .refresh()
+        .map_err(|error| error.to_string())?
+        .to_portable()
+        .map_err(|error| error.to_string())
+}
 
 /// Agent-level playback source intent for one capture attempt.
 ///
@@ -558,7 +583,7 @@ fn process_capture(
     };
 
     let stream_id = StreamId::new(format!(
-        "wasapi-loopback-{}-{}",
+        "stream-{}-{}",
         std::process::id(),
         STREAM_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ))
@@ -839,6 +864,7 @@ fn capture_thread_inner(
     })?;
     let _com = ComGuard;
 
+    let discovery_access = lock_discovery_access();
     let identity_registry_directory = default_identity_registry_directory()?;
     let mut discovery = PlaybackDiscovery::new(
         identity_registry_directory,
@@ -973,6 +999,7 @@ fn capture_thread_inner(
         }
     }
     .map_err(capture_discovery_failure)?;
+    drop(discovery_access);
     if end_signal.load(Ordering::Acquire) != END_NONE {
         return Err(CaptureFailure::source_unavailable(
             "playback endpoint changed while capture startup was being validated",
@@ -1789,7 +1816,15 @@ mod tests {
         assert_eq!(report.end, CaptureEnd::DurationElapsed);
         assert_eq!(report.end_diagnostic, None);
         assert_eq!(events.len(), 4);
-        assert!(matches!(events[0], StreamEvent::Started(_)));
+        let StreamEvent::Started(descriptor) = &events[0] else {
+            panic!("first event was not stream start");
+        };
+        assert!(descriptor.stream_id().as_str().starts_with("stream-"));
+        assert!(!descriptor
+            .stream_id()
+            .as_str()
+            .to_ascii_lowercase()
+            .contains("wasapi"));
         assert!(matches!(events[1], StreamEvent::Data(_)));
         assert!(matches!(events[2], StreamEvent::Data(_)));
         assert!(matches!(

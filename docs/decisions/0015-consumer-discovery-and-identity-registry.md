@@ -269,14 +269,14 @@ This alternative is selected.
 
 ### Implementation impact
 
-`resonance-api` now represents the consumer contract with owned `DiscoverySnapshot` and `SourceDescriptor` values, an opaque equality-only `DiscoveryRevision`, three-state `SourceAvailability`, duplicate-free supported-product and default-role sets, and no transport or serialization commitment. `resonance-agent` owns the private registry boundary and transactional storage implementation, including namespace and ID allocation, permanent tombstones, migration handling, reset, and fake-backend/fault-injection seams. The Windows discovery adapter supplies persistent `IMMDevice` endpoint IDs as private evidence, enumerates active render endpoints, resolves the console default role, retains known absent playback sources as unavailable, and converts private revision-aware snapshots to the portable value without native evidence or registry internals. Default Playback capture refreshes and revalidates that private mapping at attempt start; consumer transport remains future work.
+`resonance-api` represents the transport-independent consumer contract with owned `DiscoverySnapshot` and `SourceDescriptor` values, an opaque equality-only `DiscoveryRevision`, three-state `SourceAvailability`, duplicate-free supported-product and default-role sets. `resonance-agent` owns the private registry boundary and transactional storage implementation, including namespace and ID allocation, permanent tombstones, migration handling, reset, and fake-backend/fault-injection seams. The Windows discovery adapter supplies persistent `IMMDevice` endpoint IDs as private evidence, enumerates active render endpoints, resolves the console default role, retains known absent playback sources as unavailable, and converts private revision-aware snapshots to the portable value without native evidence or registry internals. Default Playback capture refreshes and revalidates that private mapping at attempt start; ADR 0016 maps only the portable result to the loopback v1 transport.
 
-Milestones 6P, 6Q, 6R, 6S, and 6T implement durable registry persistence, continuity fallback, private Windows playback discovery, the portable Rust discovery contract, and separate capture-time Default Playback and Explicit Source mappings. Public storage schema, transport, endpoint watching, and consumer-visible service behavior remain deferred.
+Milestones 6P through 6U implement durable registry persistence, continuity fallback, private Windows playback discovery, the portable Rust discovery contract, separate capture-time Default Playback and Explicit Source mappings, and the consumer-visible local service. Public storage schema, endpoint watching, and remote service behavior remain deferred.
 
 ## Deferred Decisions
 
-- storage schema migration and transport encoding strategy;
-- discovery paging, change notification, and public Rust or transport representation;
+- storage schema migration;
+- discovery paging and change notification;
 - Windows explicit-source resolution and capture;
 - PipeWire discovery, stable-property mapping, and Linux implementation;
 - UI, sorting, grouping, localization, and consumer source-selection flows;
