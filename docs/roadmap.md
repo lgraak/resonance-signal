@@ -248,13 +248,22 @@
 - Retained known non-retired absent playback sources as `Unavailable`, advertised only the proven `Waveform` product, and preserved revision equality plus private stale-resolution rejection and exact-ID no-substitution behavior.
 - Kept capture-time Default Playback mapping, explicit-source capture, endpoint watching, transport, serialization, UI, InfoPanel, microphone discovery, PipeWire, and recovery execution deferred.
 
+## Milestone 6S: Mapped Default Playback capture
+
+- Resolved the Windows console-role Default Playback owner through the private discovery and durable identity registry at the start of each capture attempt.
+- Bound one opaque registry-backed `SourceId` to the exact private WASAPI endpoint ID, opened that endpoint explicitly, and revalidated the revision-bound mapping after notification registration before publishing `Started`.
+- Replaced the legacy logical `default-playback` stream source with the actual mapped `SourceId` while retaining Default Playback as internal role intent.
+- Failed closed before stream publication when the default role, discovery snapshot, registry durability, or opened endpoint could not prove the same binding.
+- Added deterministic coverage for role movement, stale binding rejection, unavailable default, duplicate names, no synthetic identity, exact endpoint mismatch, truthful descriptors, and independent stream identities.
+- Kept explicit-source capture, endpoint watching, automatic migration or replacement, transport, UI, microphone discovery, PipeWire, and recovery execution deferred.
+
 ## Later milestones
 
 - Execute the accepted measurement plan, collect representative operational evidence, and review candidate failure classes without enabling recovery.
 - Select exact retry, cooldown, backoff, jitter, and stable-run values only from accepted evidence; define deterministic delay calculation and jitter sampling; and design a configuration source/reload boundary in separately scoped milestones.
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
-- Wire mapped Default Playback into capture, then implement explicit `SourceId` playback capture as separately scoped work.
+- Implement explicit `SourceId` playback capture as separately scoped work.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
 

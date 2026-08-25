@@ -50,7 +50,7 @@ Default Playback means “resolve the platform's current default playback source
 - An active stream never changes source identity in place.
 - No attempt, watcher, or recovery action is implied by the intent itself.
 
-The existing `Default(DefaultSource::Playback)` selector represents this intent at the consumer-contract boundary. The current Windows runtime implements only an explicit capture run against the default playback endpoint; repeated or automatic resolution remains future orchestration work. It currently emits the logical value `default-playback` as its `SourceId` and retains resolved endpoint identity only in diagnostics, so the target identity mapping in this ADR is not yet implemented.
+The existing `Default(DefaultSource::Playback)` selector represents this intent at the consumer-contract boundary. The current Windows runtime implements one explicit capture attempt at a time and resolves the console-role default through the private registry immediately before that attempt. It reports the mapped opaque endpoint `SourceId`; automatic replacement and repeated recovery-driven attempts remain future orchestration work.
 
 ### Explicit Source
 
@@ -85,7 +85,7 @@ The provider must never reuse a `SourceId` for a different source within the sam
 
 ### Persistence expectations
 
-[ADR 0014](0014-source-discovery-and-identity-model.md) defines the identity domain as one provider installation on one host with one retained mapping namespace. Within that domain, implemented discovery must preserve IDs across process restarts and temporary disappearance while native continuity remains proven. IDs are not portable across hosts, installations, mapping resets, operating-system reinstallations, or unproven backend re-enumeration. Mapping storage and runtime enforcement remain unimplemented.
+[ADR 0014](0014-source-discovery-and-identity-model.md) defines the identity domain as one provider installation on one host with one retained mapping namespace. Within that domain, implemented discovery preserves IDs across process restarts and temporary disappearance while native continuity remains proven. IDs are not portable across hosts, installations, mapping resets, operating-system reinstallations, or unproven backend re-enumeration. Windows registry storage and Default Playback runtime enforcement are implemented; other platform mappings remain deferred.
 
 ## Lifecycle Semantics
 
@@ -141,7 +141,7 @@ For every started stream, the provider guarantees:
 - ordered lifecycle events when the source disappears, changes, or becomes unusable; and
 - platform-neutral source, stream, format, and error semantics.
 
-The provider does not yet guarantee device discovery, persistent IDs across provider lifetimes, automatic waiting or retry, endpoint watching, replacement-owner creation, or equivalent platform behavior beyond the semantic rules in this ADR.
+The provider now implements Windows playback discovery, persistent installation-scoped IDs, and capture-time Default Playback mapping. It does not guarantee automatic waiting or retry, endpoint watching, replacement-owner creation, explicit-source capture, or equivalent behavior on other platforms.
 
 ## Alternatives Considered
 
@@ -180,7 +180,7 @@ This alternative is selected.
 
 - Source discovery representation and durable identity scope are defined by ADR 0014, but enumeration and mapping persistence are not implemented.
 - Current Windows runtime exposes only default-playback capture and does not execute replacement or follow-default recovery.
-- Current Windows runtime reports the logical `default-playback` value rather than a provider-mapped resolved endpoint `SourceId`; consumers cannot yet select or compare resolved endpoint identities through the API.
+- Current Windows runtime reports the provider-mapped resolved endpoint `SourceId`; consumer explicit-source capture remains unavailable.
 - Exact equivalence between native identities across device removal, re-enumeration, process restart, or operating-system changes is platform-specific and unresolved.
 - Consumers must handle new stream identities whenever capture resumes, even if the same source returns.
 

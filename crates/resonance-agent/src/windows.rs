@@ -2,6 +2,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::Arc;
@@ -18,6 +19,8 @@ use wasapi::{
 };
 
 use crate::capture::{AudioFrameBuilder, CaptureError, CaptureFormat, CapturePacket, PacketFlags};
+use crate::discovery::{DiscoveryError, PlaybackCaptureBinding, PlaybackDiscovery};
+use crate::windows_discovery::WindowsPlaybackEndpointSource;
 
 // Real-device validation showed one 10 ms packet at a time. Four slots keep
 // callback work decoupled from ordinary processing without making buffering a
@@ -530,8 +533,7 @@ fn process_capture(
         STREAM_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     ))
     .map_err(|error| CaptureRunError::Contract(error.to_string()))?;
-    let source_id = SourceId::new("default-playback")
-        .map_err(|error| CaptureRunError::Contract(error.to_string()))?;
+    let source_id = started.source_id;
     let descriptor = StreamDescriptor::new(
         stream_id.clone(),
         source_id.clone(),
@@ -801,16 +803,26 @@ fn capture_thread_inner(
     })?;
     let _com = ComGuard;
 
+    let identity_registry_directory = default_identity_registry_directory()?;
+    let mut discovery = PlaybackDiscovery::new(
+        identity_registry_directory,
+        WindowsPlaybackEndpointSource::new(),
+    )
+    .map_err(capture_discovery_failure)?;
+    let binding = discovery
+        .refresh_default_playback_capture()
+        .map_err(capture_discovery_failure)?;
+
     let enumerator = wasapi::DeviceEnumerator::new().map_err(|error| {
         CaptureFailure::internal(format!(
             "failed to create WASAPI device enumerator: {error}"
         ))
     })?;
     let device = enumerator
-        .get_default_device(&Direction::Render)
+        .get_device(binding.endpoint_id())
         .map_err(|error| {
             CaptureFailure::source_unavailable(format!(
-                "default playback endpoint is unavailable: {error}"
+                "resolved default playback endpoint is unavailable: {error}"
             ))
         })?;
     let endpoint_id = device.get_id().map_err(|error| {
@@ -818,6 +830,7 @@ fn capture_thread_inner(
             "failed to read default playback endpoint identity: {error}"
         ))
     })?;
+    validate_capture_endpoint(&binding, &endpoint_id)?;
     let endpoint_name = device.get_friendlyname().map_err(|error| {
         CaptureFailure::source_unavailable(format!(
             "failed to read default playback endpoint name: {error}"
@@ -907,6 +920,15 @@ fn capture_thread_inner(
             ))
         })?;
 
+    discovery
+        .revalidate_default_playback_capture(&binding)
+        .map_err(capture_discovery_failure)?;
+    if end_signal.load(Ordering::Acquire) != END_NONE {
+        return Err(CaptureFailure::source_unavailable(
+            "default playback endpoint changed while capture startup was being validated",
+        ));
+    }
+
     let (recycle_tx, recycle_rx) = mpsc::sync_channel(HANDOFF_CAPACITY);
     for _ in 0..HANDOFF_CAPACITY {
         recycle_tx.try_send(vec![0_u8; buffer_bytes]).map_err(|_| {
@@ -918,8 +940,15 @@ fn capture_thread_inner(
             "default playback endpoint could not start: {error}"
         ))
     })?;
+    if end_signal.load(Ordering::Acquire) != END_NONE {
+        let _ = audio_client.stop_stream();
+        return Err(CaptureFailure::source_unavailable(
+            "default playback endpoint changed before capture startup completed",
+        ));
+    }
     capture_tx
         .send(CaptureMessage::Started(CaptureStarted {
+            source_id: binding.source_id().clone(),
             endpoint_name,
             native_sample_rate_hz,
             native_channel_count,
@@ -1143,12 +1172,49 @@ impl Drop for ComGuard {
 
 #[derive(Debug)]
 struct CaptureStarted {
+    source_id: SourceId,
     endpoint_name: String,
     native_sample_rate_hz: u32,
     native_channel_count: u16,
     maximum_packet_frames: u32,
     format: CaptureFormat,
     recycle_tx: SyncSender<Vec<u8>>,
+}
+
+fn default_identity_registry_directory() -> Result<PathBuf, CaptureFailure> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            CaptureFailure::internal(
+                "LOCALAPPDATA is unavailable; source identity registry cannot be opened",
+            )
+        })?;
+    Ok(PathBuf::from(local_app_data)
+        .join("Resonance Signal")
+        .join("provider-state"))
+}
+
+fn capture_discovery_failure(error: DiscoveryError) -> CaptureFailure {
+    match error {
+        DiscoveryError::Registry(_) => CaptureFailure::internal(format!(
+            "source identity registry could not establish durable identity: {error}"
+        )),
+        _ => CaptureFailure::source_unavailable(format!(
+            "default playback source could not be resolved safely: {error}"
+        )),
+    }
+}
+
+fn validate_capture_endpoint(
+    binding: &PlaybackCaptureBinding,
+    opened_endpoint_id: &str,
+) -> Result<(), CaptureFailure> {
+    if binding.endpoint_id() != opened_endpoint_id {
+        return Err(CaptureFailure::source_unavailable(
+            "opened playback endpoint did not match the registry-backed source binding",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -1391,10 +1457,15 @@ mod tests {
     }
 
     fn run_fake_stream() -> (CaptureReport, Vec<StreamEvent>) {
+        run_fake_stream_for("source-a")
+    }
+
+    fn run_fake_stream_for(source_id: &str) -> (CaptureReport, Vec<StreamEvent>) {
         let (capture_tx, capture_rx) = mpsc::sync_channel(4);
         let (recycle_tx, _recycle_rx) = mpsc::sync_channel(2);
         capture_tx
             .send(CaptureMessage::Started(CaptureStarted {
+                source_id: SourceId::new(source_id).unwrap(),
                 endpoint_name: "fake endpoint".to_string(),
                 native_sample_rate_hz: 48_000,
                 native_channel_count: 2,
@@ -1672,8 +1743,41 @@ mod tests {
     }
 
     #[test]
+    fn stream_descriptor_reports_resolved_source_without_logical_placeholder() {
+        let (_, first_events) = run_fake_stream_for("source-a");
+        let (_, second_events) = run_fake_stream_for("source-b");
+
+        let first = match &first_events[0] {
+            StreamEvent::Started(descriptor) => descriptor,
+            _ => panic!("first event was not stream start"),
+        };
+        let second = match &second_events[0] {
+            StreamEvent::Started(descriptor) => descriptor,
+            _ => panic!("first event was not stream start"),
+        };
+
+        assert_eq!(first.source_id().as_str(), "source-a");
+        assert_eq!(second.source_id().as_str(), "source-b");
+        assert_ne!(first.source_id().as_str(), "default-playback");
+        assert_ne!(second.source_id().as_str(), "default-playback");
+        assert_ne!(first.stream_id(), second.stream_id());
+    }
+
+    #[test]
+    fn endpoint_mismatch_fails_before_stream_start_can_be_published() {
+        let binding =
+            PlaybackCaptureBinding::for_test(SourceId::new("source-a").unwrap(), "endpoint-a");
+
+        let failure = validate_capture_endpoint(&binding, "endpoint-b").unwrap_err();
+
+        assert_eq!(failure.kind, ErrorKind::SourceUnavailable);
+        assert_eq!(failure.retry_hint, RetryHint::WaitForSource);
+        assert!(failure.message.contains("did not match"));
+    }
+
+    #[test]
     fn overload_is_explicit_and_machine_actionable() {
-        let source_id = SourceId::new("default-playback").unwrap();
+        let source_id = SourceId::new("source-a").unwrap();
         let stream_id = StreamId::new("stream-test").unwrap();
         let (error, reason) = contract_end(
             CaptureEnd::BoundedHandoffExhausted,
@@ -1693,7 +1797,7 @@ mod tests {
 
     #[test]
     fn normal_stop_and_platform_boundaries_map_to_contract_lifecycle() {
-        let source_id = SourceId::new("default-playback").unwrap();
+        let source_id = SourceId::new("source-a").unwrap();
         let stream_id = StreamId::new("stream-test").unwrap();
 
         let (error, reason) = contract_end(CaptureEnd::StopRequested, None, &source_id, &stream_id);
@@ -1757,6 +1861,15 @@ mod tests {
             _ => panic!("first event was not stream start"),
         };
         assert_ne!(first_stream, second_stream);
+        let first_source = match &first_events[0] {
+            StreamEvent::Started(descriptor) => descriptor.source_id(),
+            _ => unreachable!(),
+        };
+        let second_source = match &second_events[0] {
+            StreamEvent::Started(descriptor) => descriptor.source_id(),
+            _ => unreachable!(),
+        };
+        assert_eq!(first_source, second_source);
 
         for events in [&first_events, &second_events] {
             match &events[1] {

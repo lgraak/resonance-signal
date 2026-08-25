@@ -122,7 +122,7 @@ Windows mapping must use the native endpoint identifier and endpoint lifecycle e
 
 The mapping implementation must validate how native endpoint identifiers behave across disable/enable, unplug/replug, Bluetooth reconnect, driver replacement, and operating-system re-enumeration. The current evidence supports temporary absence and later resolution, but it does not establish every persistence boundary. Ambiguous return receives a new provider ID.
 
-The current Windows adapter still emits the logical value `default-playback` as its `SourceId` and retains the endpoint name only in diagnostics. That placeholder does not implement this ADR's resolved-source mapping and remains unchanged in this design milestone.
+The original Windows adapter emitted the logical value `default-playback` as its `SourceId`. Milestone 6S replaced that placeholder: the adapter now resolves the registry-backed endpoint identity at attempt start and reports its opaque `SourceId`.
 
 ### Linux/PipeWire considerations
 
@@ -232,7 +232,7 @@ This alternative is selected.
 
 ### Future implementation impact
 
-The implemented private Windows discovery layer enumerates active render endpoints, maps persistent `IMMDevice` endpoint IDs through the durable registry, resolves the console Default Playback role, and rejects stale or unsafe resolution. Future consumer discovery work must expose platform-neutral descriptors without backend-native keys. The Windows capture adapter must still report the mapped endpoint `SourceId` instead of its legacy `default-playback` placeholder; the PipeWire adapter must establish validated stable-property rules before explicit-source capture.
+The implemented private Windows discovery layer enumerates active render endpoints, maps persistent `IMMDevice` endpoint IDs through the durable registry, resolves the console Default Playback role, and rejects stale or unsafe resolution. The portable consumer snapshot exposes platform-neutral descriptors without backend-native keys. The Windows capture adapter opens the exact endpoint from the revision-bound private mapping and reports its opaque `SourceId`; the PipeWire adapter must establish validated stable-property rules before explicit-source capture.
 
 Tests will need to cover duplicate display names, metadata changes, default-role changes, disappearance/return with and without continuity, native-key reuse, mapping reset, stale discovery snapshots, invalid explicit IDs, and no-substitution behavior. Runtime work requires separate approval.
 
@@ -241,7 +241,7 @@ The original design milestone changed no runtime behavior. Milestone 6Q subseque
 ## Deferred Decisions
 
 - consumer discovery request filters, public snapshot representation, and change delivery;
-- Windows capture integration with mapped endpoint IDs and explicit-source capture;
+- explicit-source Windows capture;
 - the PipeWire adapter, stable-property selection, and default-sink/monitor mapping;
 - mapping storage format, location, retention, migration, repair, reset, and backup behavior;
 - UI and consumer presentation, sorting, grouping, and source selection flows;
