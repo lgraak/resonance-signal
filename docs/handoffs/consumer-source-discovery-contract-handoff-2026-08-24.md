@@ -1,12 +1,12 @@
 # Consumer Source Discovery Contract Handoff
 
 Date: 2026-08-24 (America/Los_Angeles)
-Status: completed locally; authoritative publication authorized and pending
+Status: completed locally; authoritative publication blocked pending exact confirmation
 Model: Codex (GPT-5)
 Effort: unknown (not exposed to this session)
 Repository: `resonance-signal` at `D:\Aeons\Git\resonance-signal`
 Branch: `main`
-HEAD: `4fa90bdcd9f0643afeb0a5a7d928a48fb4b20381` (Milestone 6R implementation commit at handoff authoring)
+HEAD: `fc200c024a002fd0dd77006e31eb6b5d0f12b273` (handoff-and-standards checkpoint; base of this final publication-state correction)
 Authoritative remote: `origin` -> `https://github.com/lgraak/resonance-signal.git`
 
 > This handoff is a continuation checkpoint, not authoritative truth. Current
@@ -47,7 +47,7 @@ Explicit-source capture, capture-time Default Playback mapping, endpoint watchin
 
 ## Current Repository State
 
-- Branch and implementation HEAD at handoff authoring: `main` at `4fa90bdcd9f0643afeb0a5a7d928a48fb4b20381` (`Add portable source discovery contract`).
+- Branch and HEAD before this final publication-state correction: `main` at `fc200c024a002fd0dd77006e31eb6b5d0f12b273` (`Add project handoff standards and Milestone 6R checkpoint`).
 - Working tree before handoff creation: clean.
 - Working tree after handoff creation: the handoff and the two user-supplied standards under `docs/standards/` are the only three added files and form one checkpoint commit scope.
 - Upstream: `main` tracks `origin/main`.
@@ -55,8 +55,8 @@ Explicit-source capture, capture-time Default Playback mapping, endpoint watchin
 - Divergence before the handoff commit: local `main` was one implementation commit ahead of the verified remote.
 - Commit created for implementation: `4fa90bdcd9f0643afeb0a5a7d928a48fb4b20381`.
 - Push result: not published. The push request was rejected before execution because the external GitHub payload and destination required an explicit confirmation. Remote readback confirmed the implementation commit was absent.
-- Handoff and standards commit: pending at document authoring and intended as a separate local checkpoint because the implementation commit already existed; shared history was not rewritten.
-- Publication authorization: the user explicitly authorized committing the two copied standards with this handoff and pushing the completed local commits to `origin/main`.
+- Handoff and standards commit: `fc200c024a002fd0dd77006e31eb6b5d0f12b273`; created as a separate local checkpoint because the implementation commit already existed. Shared history was not rewritten.
+- Publication authorization: the user authorized committing and pushing the copied standards with this handoff. The external-publication safety gate requires additional explicit confirmation that the push necessarily includes parent implementation commit `4fa90bdcd9f0643afeb0a5a7d928a48fb4b20381` as well as the checkpoint commit.
 - Preserved unrelated changes: none.
 
 ## Current Known-Good State
@@ -115,6 +115,8 @@ This checkpoint:
 - `docs/standards/ai-project-handoff-standard-v1.md`: adds the project-neutral 14-section continuation-checkpoint standard.
 - `docs/standards/ai-project-prompt-standard-v1.md`: adds the project-neutral prompt-authoring and default publication standard.
 
+The follow-up documentation correction updates this handoff's publication status after the external push was rejected before execution; it does not alter implementation or standards content.
+
 Generated build and rustdoc output remained under ignored `target/` storage and was not committed. No unrelated file was modified, staged, or removed.
 
 ## Validation Completed
@@ -132,14 +134,15 @@ Generated build and rustdoc output remained under ignored `target/` storage and 
 - `git ls-remote --heads origin refs/heads/main`: direct approved readback succeeded and returned `a23d49dad550268f164c9f25c1b466c0697f4618`.
 - `gitleaks dir docs --no-banner --redact --no-color`: passed; approximately 389 KB scanned and no leaks found.
 - SHA-256 comparison: both repository standards exactly matched their project-attached sources under `D:\Aeons\Git\standards`.
-- Handoff validation: required heading order, metadata, repository-relative references, UTF-8 encoding, final newline, whitespace, secret scan, and exact final scope are validated after file creation and before its local commit.
+- Publication attempt after checkpoint commit: rejected before execution because pushing the checkpoint would also publish its parent implementation commit and that exact combined payload-to-GitHub authorization was not explicit. No workaround was attempted.
+- Handoff validation: required heading order, metadata, repository-relative references, UTF-8 without BOM, final newline, whitespace, secret scan, and exact final scope passed after the publication-state correction.
 - Not run: Clippy, because it was optional in the packet and unrelated lint cleanup was explicitly excluded.
 - Not run: consumer transport, explicit-source capture, capture-time mapped Default Playback, endpoint watching, microphone discovery, PipeWire, UI, InfoPanel, or recovery execution validation because those behaviors remain unimplemented and out of scope.
 
 ## Production State Versus Repository State
 
 - Implemented: portable Rust discovery value types, Windows private-to-portable mapping, unavailable known-source representation, opaque revision comparison, stale exact-ID resolution rejection, tests, and documentation.
-- Committed locally: implementation commit `4fa90bdcd9f0643afeb0a5a7d928a48fb4b20381` on `main`; this handoff and the two repository standards are intended for a separate local checkpoint commit.
+- Committed locally: implementation commit `4fa90bdcd9f0643afeb0a5a7d928a48fb4b20381` and handoff-and-standards checkpoint `fc200c024a002fd0dd77006e31eb6b5d0f12b273` on `main`; this corrected publication state is recorded in a follow-up documentation commit rather than by rewriting either commit.
 - Pushed: no. Direct remote readback showed `origin/main` still at `a23d49dad550268f164c9f25c1b466c0697f4618`.
 - Deployed or activated: not applicable. No service, transport, installer, endpoint watcher, capture integration, or consumer application was deployed or activated.
 - Runtime-validated: the private Windows discovery adapter converted one real Arrakis playback endpoint to the portable contract in a temporary test registry. This does not establish a deployed consumer discovery service.
@@ -149,7 +152,7 @@ Generated build and rustdoc output remained under ignored `target/` storage and 
 
 ## Unresolved Issues and Unverified Assumptions
 
-- The implementation, handoff, and standards are not yet on the authoritative remote at document authoring. The user subsequently gave explicit authorization to commit the three checkpoint files and push both local commits to the configured GitHub `origin/main`.
+- The implementation, handoff, and standards are not yet on the authoritative remote. The user authorized the standards/handoff commit and requested a push, but the safety gate requires explicit confirmation that the same push also publishes implementation commit `4fa90bdcd9f0643afeb0a5a7d928a48fb4b20381` to the configured GitHub destination.
 - The task attachment was physically truncated in its final acceptance list after `- Windows`. All complete preceding requirements were implemented and validated; unknown missing tail text remains unverified.
 - The real Windows test uses temporary registry storage. It proves portable conversion and same-run refresh/reopen behavior, not the identity of a separately installed long-lived provider instance.
 - `origin/main` was directly verified as `a23d49d` on 2026-08-24, but remote state is time-sensitive and must be re-read before pushing.
@@ -162,7 +165,7 @@ Generated build and rustdoc output remained under ignored `target/` storage and 
 - The real-device test enumerated playback state only and used temporary registry files removed at test completion. It did not change device availability or system configuration.
 - No dependency, service, process configuration, deployment, external API, or consumer system was changed.
 - Local rollback before publication is a Git review decision. Prefer a normal revert of the scoped local commit or a follow-up correction; do not use destructive reset or history rewriting without explicit authorization.
-- Authoritative publication is the only pending external side effect. Explicit approval has been granted to send the implementation and checkpoint commits to `https://github.com/lgraak/resonance-signal.git` branch `main`, followed by remote SHA readback.
+- Authoritative publication is the only pending external side effect. Before pushing, obtain explicit approval to send both the implementation commit and checkpoint history to `https://github.com/lgraak/resonance-signal.git` branch `main`, followed by remote SHA readback.
 - GitHub credentials remain managed by the existing Git credential mechanism; no credential value was viewed or recorded.
 
 ## Do Not Redo or Reopen
@@ -179,4 +182,4 @@ Generated build and rustdoc output remained under ignored `target/` storage and 
 
 ## Next Recommended Action
 
-Create the scoped checkpoint commit containing this handoff and both repository standards, push it together with implementation commit `4fa90bdcd9f0643afeb0a5a7d928a48fb4b20381` to `origin/main`, and verify the authoritative remote SHA.
+Obtain explicit confirmation to publish implementation commit `4fa90bdcd9f0643afeb0a5a7d928a48fb4b20381` together with the handoff-and-standards checkpoint history to `https://github.com/lgraak/resonance-signal.git` branch `main`, then push and verify the authoritative remote SHA.
