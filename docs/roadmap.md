@@ -257,13 +257,22 @@
 - Added deterministic coverage for role movement, stale binding rejection, unavailable default, duplicate names, no synthetic identity, exact endpoint mismatch, truthful descriptors, and independent stream identities.
 - Kept explicit-source capture, endpoint watching, automatic migration or replacement, transport, UI, microphone discovery, PipeWire, and recovery execution deferred.
 
+## Milestone 6T: Explicit SourceId playback capture
+
+- Added an agent-level Default Playback versus Explicit Source intent to Windows owner and supervisor construction without exposing native endpoint types.
+- Resolved an explicit opaque `SourceId` through fresh private discovery and registry state, bound only its exact live WASAPI endpoint, and revalidated the revision-bound mapping before `Started`.
+- Failed unknown, unavailable, retired, stale, and mismatched explicit mappings closed without substituting Default Playback, a same-named source, or another available endpoint.
+- Reported the selected opaque `SourceId` in `StreamDescriptor`, retained private native identity, and preserved a new `StreamId` and timeline for every attempt.
+- Kept Default Playback independently role-resolved and made default-role changes irrelevant to an active explicit capture while retaining endpoint and session termination boundaries.
+- Added a narrow diagnostic `--source-id <opaque-id>` option, hardware-independent identity/binding tests, and real Arrakis validation for Default Playback, explicit repeat capture, and unknown-ID rejection.
+- Kept endpoint watching, automatic migration or recovery, transport, UI, microphone discovery, and PipeWire deferred.
+
 ## Later milestones
 
 - Execute the accepted measurement plan, collect representative operational evidence, and review candidate failure classes without enabling recovery.
 - Select exact retry, cooldown, backoff, jitter, and stable-run values only from accepted evidence; define deterministic delay calculation and jitter sampling; and design a configuration source/reload boundary in separately scoped milestones.
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
-- Implement explicit `SourceId` playback capture as separately scoped work.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
 

@@ -17,7 +17,7 @@ use crate::recovery_config::{
 use crate::retry_state::{AttemptId, RetryFailureCause, RetrySnapshot, RetryState};
 use crate::windows::{
     CaptureEnd, CaptureOwner, CaptureOwnerCompletion, CaptureOwnerShutdownTimeout,
-    CaptureOwnerStart, CaptureOwnerStartError,
+    CaptureOwnerStart, CaptureOwnerStartError, PlaybackCaptureIntent,
 };
 
 /// Consumer callback passed through the supervisor to one capture owner.
@@ -90,15 +90,32 @@ impl fmt::Display for CaptureOwnerConstructionError {
 impl Error for CaptureOwnerConstructionError {}
 
 /// Production factory for the Windows WASAPI capture owner.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct WasapiCaptureOwnerFactory;
+#[derive(Clone, Debug)]
+pub struct WasapiCaptureOwnerFactory {
+    source_intent: PlaybackCaptureIntent,
+}
+
+impl WasapiCaptureOwnerFactory {
+    pub fn new(source_intent: PlaybackCaptureIntent) -> Self {
+        Self { source_intent }
+    }
+}
+
+impl Default for WasapiCaptureOwnerFactory {
+    fn default() -> Self {
+        Self::new(PlaybackCaptureIntent::DefaultPlayback)
+    }
+}
 
 impl CaptureOwnerFactory for WasapiCaptureOwnerFactory {
     fn create(
         &mut self,
         on_event: CaptureEventCallback,
     ) -> Result<Box<dyn SupervisedCaptureOwner>, CaptureOwnerConstructionError> {
-        Ok(Box::new(CaptureOwner::new(on_event)))
+        Ok(Box::new(CaptureOwner::for_source(
+            self.source_intent.clone(),
+            on_event,
+        )))
     }
 }
 
@@ -308,7 +325,15 @@ impl CaptureSupervisor {
     /// Creates an inert production supervisor without allocating capture
     /// resources or starting an owner.
     pub fn new(on_event: impl FnMut(StreamEvent) + Send + 'static) -> Self {
-        Self::with_factory(WasapiCaptureOwnerFactory, on_event)
+        Self::for_source(PlaybackCaptureIntent::DefaultPlayback, on_event)
+    }
+
+    /// Creates an inert production supervisor for one playback source intent.
+    pub fn for_source(
+        source_intent: PlaybackCaptureIntent,
+        on_event: impl FnMut(StreamEvent) + Send + 'static,
+    ) -> Self {
+        Self::with_factory(WasapiCaptureOwnerFactory::new(source_intent), on_event)
     }
 
     /// Creates an inert supervisor with an injected single-use owner factory.

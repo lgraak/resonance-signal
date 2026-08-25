@@ -35,6 +35,17 @@ const AUDCLNT_E_DEVICE_INVALIDATED: i32 = 0x8889_0004_u32 as i32;
 
 static STREAM_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+/// Agent-level playback source intent for one capture attempt.
+///
+/// Default Playback resolves the current Windows console-role endpoint at
+/// attempt start. Explicit capture accepts only the requested provider-managed
+/// opaque source identity.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PlaybackCaptureIntent {
+    DefaultPlayback,
+    Explicit(SourceId),
+}
+
 /// A cloneable request for a running capture operation to stop normally.
 ///
 /// This is the production lifecycle control. The duration-based command-line
@@ -244,7 +255,7 @@ impl fmt::Display for CaptureOwnerShutdownTimeout {
 
 impl Error for CaptureOwnerShutdownTimeout {}
 
-/// Explicit owner of one Windows default-playback capture run.
+/// Explicit owner of one Windows playback capture run.
 ///
 /// `CaptureOwner` is single-use. [`Self::start`] spawns one ordinary worker
 /// thread, and that worker owns the blocking capture operation, consumer
@@ -272,8 +283,16 @@ impl CaptureOwner {
     /// Creates an inert owner. No thread or WASAPI resource exists until
     /// [`Self::start`] is called.
     pub fn new(on_event: impl FnMut(StreamEvent) + Send + 'static) -> Self {
+        Self::for_source(PlaybackCaptureIntent::DefaultPlayback, on_event)
+    }
+
+    /// Creates an inert owner for one explicit agent-level source intent.
+    pub fn for_source(
+        source_intent: PlaybackCaptureIntent,
+        on_event: impl FnMut(StreamEvent) + Send + 'static,
+    ) -> Self {
         Self::with_runner(on_event, |stop, mut on_event| {
-            run_default_playback_loopback(stop, &mut on_event)
+            run_playback_loopback(source_intent, stop, &mut on_event)
         })
     }
 
@@ -436,7 +455,16 @@ pub fn run_default_playback_loopback(
     stop: CaptureStopToken,
     mut on_event: impl FnMut(StreamEvent),
 ) -> Result<CaptureReport, CaptureRunError> {
-    run_capture(RunLimit::UntilStopped, stop, &mut on_event)
+    run_playback_loopback(PlaybackCaptureIntent::DefaultPlayback, stop, &mut on_event)
+}
+
+/// Captures one playback source intent until stopped or a stream boundary.
+pub fn run_playback_loopback(
+    source_intent: PlaybackCaptureIntent,
+    stop: CaptureStopToken,
+    mut on_event: impl FnMut(StreamEvent),
+) -> Result<CaptureReport, CaptureRunError> {
+    run_capture(RunLimit::UntilStopped, source_intent, stop, &mut on_event)
 }
 
 /// Runs the production capture boundary for a bounded diagnostic interval.
@@ -453,6 +481,7 @@ pub fn run_default_playback_loopback_for(
     }
     run_capture(
         RunLimit::Duration(duration),
+        PlaybackCaptureIntent::DefaultPlayback,
         CaptureStopToken::new(),
         &mut on_event,
     )
@@ -460,6 +489,7 @@ pub fn run_default_playback_loopback_for(
 
 fn run_capture(
     limit: RunLimit,
+    source_intent: PlaybackCaptureIntent,
     stop: CaptureStopToken,
     on_event: &mut impl FnMut(StreamEvent),
 ) -> Result<CaptureReport, CaptureRunError> {
@@ -469,7 +499,7 @@ fn run_capture(
     let capture_stop = stop.clone();
     let handle = thread::Builder::new()
         .name("resonance-wasapi-loopback".to_string())
-        .spawn(move || capture_thread(limit, capture_stop, capture_tx))
+        .spawn(move || capture_thread(limit, source_intent, capture_stop, capture_tx))
         .map_err(CaptureRunError::Spawn)?;
 
     let capture_thread = CaptureThread {
@@ -787,14 +817,20 @@ fn update_duration_range(
     }
 }
 
-fn capture_thread(limit: RunLimit, stop: CaptureStopToken, capture_tx: SyncSender<CaptureMessage>) {
-    if let Err(error) = capture_thread_inner(limit, stop, &capture_tx) {
+fn capture_thread(
+    limit: RunLimit,
+    source_intent: PlaybackCaptureIntent,
+    stop: CaptureStopToken,
+    capture_tx: SyncSender<CaptureMessage>,
+) {
+    if let Err(error) = capture_thread_inner(limit, source_intent, stop, &capture_tx) {
         let _ = capture_tx.send(CaptureMessage::Failed(error));
     }
 }
 
 fn capture_thread_inner(
     limit: RunLimit,
+    source_intent: PlaybackCaptureIntent,
     stop: CaptureStopToken,
     capture_tx: &SyncSender<CaptureMessage>,
 ) -> Result<(), CaptureFailure> {
@@ -809,9 +845,13 @@ fn capture_thread_inner(
         WindowsPlaybackEndpointSource::new(),
     )
     .map_err(capture_discovery_failure)?;
-    let binding = discovery
-        .refresh_default_playback_capture()
-        .map_err(capture_discovery_failure)?;
+    let binding = match &source_intent {
+        PlaybackCaptureIntent::DefaultPlayback => discovery.refresh_default_playback_capture(),
+        PlaybackCaptureIntent::Explicit(source_id) => {
+            discovery.refresh_explicit_playback_capture(source_id)
+        }
+    }
+    .map_err(capture_discovery_failure)?;
 
     let enumerator = wasapi::DeviceEnumerator::new().map_err(|error| {
         CaptureFailure::internal(format!(
@@ -822,28 +862,26 @@ fn capture_thread_inner(
         .get_device(binding.endpoint_id())
         .map_err(|error| {
             CaptureFailure::source_unavailable(format!(
-                "resolved default playback endpoint is unavailable: {error}"
+                "resolved playback endpoint is unavailable: {error}"
             ))
         })?;
     let endpoint_id = device.get_id().map_err(|error| {
         CaptureFailure::source_unavailable(format!(
-            "failed to read default playback endpoint identity: {error}"
+            "failed to read playback endpoint identity: {error}"
         ))
     })?;
     validate_capture_endpoint(&binding, &endpoint_id)?;
     let endpoint_name = device.get_friendlyname().map_err(|error| {
         CaptureFailure::source_unavailable(format!(
-            "failed to read default playback endpoint name: {error}"
+            "failed to read playback endpoint name: {error}"
         ))
     })?;
     let mut audio_client = device.get_iaudioclient().map_err(|error| {
-        CaptureFailure::source_unavailable(format!(
-            "failed to open default playback endpoint: {error}"
-        ))
+        CaptureFailure::source_unavailable(format!("failed to open playback endpoint: {error}"))
     })?;
     let native_format = audio_client.get_mixformat().map_err(|error| {
         CaptureFailure::unsupported_format(format!(
-            "failed to read default playback endpoint format: {error}"
+            "failed to read playback endpoint format: {error}"
         ))
     })?;
     let native_sample_rate_hz = native_format.get_samplespersec();
@@ -851,7 +889,7 @@ fn capture_thread_inner(
     let output_channel_count = match native_channel_count {
         0 => {
             return Err(CaptureFailure::unsupported_format(
-                "default playback endpoint reported zero channels",
+                "playback endpoint reported zero channels",
             ))
         }
         1 => 1,
@@ -870,7 +908,7 @@ fn capture_thread_inner(
 
     let (default_period_hns, _) = audio_client.get_device_period().map_err(|error| {
         CaptureFailure::source_unavailable(format!(
-            "failed to query default playback endpoint period: {error}"
+            "failed to query playback endpoint period: {error}"
         ))
     })?;
     audio_client
@@ -884,7 +922,7 @@ fn capture_thread_inner(
         )
         .map_err(|error| {
             CaptureFailure::unsupported_format(format!(
-                "default playback format cannot be converted to supported {} Hz / {} channel f32: {error}",
+                "playback format cannot be converted to supported {} Hz / {} channel f32: {error}",
                 native_sample_rate_hz, output_channel_count
             ))
         })?;
@@ -904,12 +942,18 @@ fn capture_thread_inner(
         .ok_or_else(|| CaptureFailure::internal("WASAPI buffer size overflowed usize"))?;
 
     let end_signal = Arc::new(AtomicU8::new(END_NONE));
-    let _device_events = register_device_events(&enumerator, &endpoint_id, end_signal.clone())
-        .map_err(|error| {
-            CaptureFailure::internal(format!(
-                "failed to register playback endpoint notifications: {error}"
-            ))
-        })?;
+    let follows_default_role = matches!(source_intent, PlaybackCaptureIntent::DefaultPlayback);
+    let _device_events = register_device_events(
+        &enumerator,
+        &endpoint_id,
+        follows_default_role,
+        end_signal.clone(),
+    )
+    .map_err(|error| {
+        CaptureFailure::internal(format!(
+            "failed to register playback endpoint notifications: {error}"
+        ))
+    })?;
     let session_control = audio_client.get_audiosessioncontrol().map_err(|error| {
         CaptureFailure::internal(format!("failed to open WASAPI session control: {error}"))
     })?;
@@ -920,12 +964,18 @@ fn capture_thread_inner(
             ))
         })?;
 
-    discovery
-        .revalidate_default_playback_capture(&binding)
-        .map_err(capture_discovery_failure)?;
+    match source_intent {
+        PlaybackCaptureIntent::DefaultPlayback => {
+            discovery.revalidate_default_playback_capture(&binding)
+        }
+        PlaybackCaptureIntent::Explicit(_) => {
+            discovery.revalidate_explicit_playback_capture(&binding)
+        }
+    }
+    .map_err(capture_discovery_failure)?;
     if end_signal.load(Ordering::Acquire) != END_NONE {
         return Err(CaptureFailure::source_unavailable(
-            "default playback endpoint changed while capture startup was being validated",
+            "playback endpoint changed while capture startup was being validated",
         ));
     }
 
@@ -936,14 +986,12 @@ fn capture_thread_inner(
         })?;
     }
     audio_client.start_stream().map_err(|error| {
-        CaptureFailure::source_unavailable(format!(
-            "default playback endpoint could not start: {error}"
-        ))
+        CaptureFailure::source_unavailable(format!("playback endpoint could not start: {error}"))
     })?;
     if end_signal.load(Ordering::Acquire) != END_NONE {
         let _ = audio_client.stop_stream();
         return Err(CaptureFailure::source_unavailable(
-            "default playback endpoint changed before capture startup completed",
+            "playback endpoint changed before capture startup completed",
         ));
     }
     capture_tx
@@ -1111,6 +1159,7 @@ fn capture_loop(
 fn register_device_events(
     enumerator: &wasapi::DeviceEnumerator,
     endpoint_id: &str,
+    follows_default_role: bool,
     end_signal: Arc<AtomicU8>,
 ) -> Result<wasapi::DeviceEventRegistration, wasapi::WasapiError> {
     let mut callbacks = DeviceEventCallbacks::new();
@@ -1130,15 +1179,17 @@ fn register_device_events(
         }
     });
 
-    let default_id = endpoint_id.to_string();
-    callbacks.set_default_device_callback(move |direction, role, id| {
-        if direction == Direction::Render
-            && role == Role::Console
-            && id.as_deref() != Some(default_id.as_str())
-        {
-            set_end_once(&end_signal, END_SOURCE_RECONFIGURED);
-        }
-    });
+    if follows_default_role {
+        let default_id = endpoint_id.to_string();
+        callbacks.set_default_device_callback(move |direction, role, id| {
+            if direction == Direction::Render
+                && role == Role::Console
+                && id.as_deref() != Some(default_id.as_str())
+            {
+                set_end_once(&end_signal, END_SOURCE_RECONFIGURED);
+            }
+        });
+    }
     enumerator.register_notification_callback(callbacks)
 }
 
@@ -1196,11 +1247,19 @@ fn default_identity_registry_directory() -> Result<PathBuf, CaptureFailure> {
 
 fn capture_discovery_failure(error: DiscoveryError) -> CaptureFailure {
     match error {
+        DiscoveryError::Registry(
+            crate::identity::RegistryError::UnknownSource
+            | crate::identity::RegistryError::SourceUnavailable
+            | crate::identity::RegistryError::SourceRetired
+            | crate::identity::RegistryError::SnapshotStale { .. },
+        ) => CaptureFailure::source_unavailable(format!(
+            "playback source could not be resolved safely: {error}"
+        )),
         DiscoveryError::Registry(_) => CaptureFailure::internal(format!(
             "source identity registry could not establish durable identity: {error}"
         )),
         _ => CaptureFailure::source_unavailable(format!(
-            "default playback source could not be resolved safely: {error}"
+            "playback source could not be resolved safely: {error}"
         )),
     }
 }

@@ -74,6 +74,7 @@ impl SourceDescriptor {
 pub(crate) struct PlaybackDiscoverySnapshot {
     identity: IdentitySnapshot,
     sources: Vec<SourceDescriptor>,
+    capture_bindings: Vec<PlaybackCaptureBinding>,
     default_playback_binding: Option<PlaybackCaptureBinding>,
 }
 
@@ -158,6 +159,7 @@ pub(crate) enum DiscoveryError {
     EndpointEnumeration(String),
     ConflictingDefaultPlaybackEndpoints,
     DefaultPlaybackUnavailable,
+    ExplicitSourceUnavailable,
     CaptureBindingStale,
     PortableSnapshotStale,
     Registry(RegistryError),
@@ -173,8 +175,11 @@ impl Display for DiscoveryError {
             Self::DefaultPlaybackUnavailable => {
                 formatter.write_str("no active endpoint owns the default playback role")
             }
+            Self::ExplicitSourceUnavailable => {
+                formatter.write_str("requested source has no exact active playback binding")
+            }
             Self::CaptureBindingStale => formatter
-                .write_str("default playback discovery changed before capture startup completed"),
+                .write_str("playback source binding changed before capture startup completed"),
             Self::PortableSnapshotStale => {
                 formatter.write_str("portable discovery snapshot is stale")
             }
@@ -294,21 +299,31 @@ impl<S: PlaybackEndpointSource> PlaybackDiscovery<S> {
             })
             .collect();
 
-        let default_playback_binding = default_playback_observation.and_then(|observation| {
-            let ObservedContinuity::Stable { backend_key, .. } = &observation.continuity else {
-                return None;
-            };
-            default_playback_source_id
-                .as_ref()
-                .map(|source_id| PlaybackCaptureBinding {
-                    identity: identity.clone(),
-                    source_id: source_id.clone(),
-                    endpoint_id: backend_key.clone(),
-                })
+        let capture_bindings = describable
+            .iter()
+            .filter_map(|observation| {
+                let ObservedContinuity::Stable { backend_key, .. } = &observation.continuity else {
+                    return None;
+                };
+                self.registry
+                    .source_id_for_observation(&observation.continuity)
+                    .map(|source_id| PlaybackCaptureBinding {
+                        identity: identity.clone(),
+                        source_id,
+                        endpoint_id: backend_key.clone(),
+                    })
+            })
+            .collect::<Vec<_>>();
+        let default_playback_binding = default_playback_source_id.as_ref().and_then(|source_id| {
+            capture_bindings
+                .iter()
+                .find(|binding| binding.source_id() == source_id)
+                .cloned()
         });
         let mut snapshot = PlaybackDiscoverySnapshot {
             identity,
             sources,
+            capture_bindings,
             default_playback_binding,
         };
         let reopened_without_registry_change =
@@ -321,6 +336,9 @@ impl<S: PlaybackEndpointSource> PlaybackDiscovery<S> {
         if reopened_without_registry_change || descriptor_change_without_registry_change {
             snapshot.identity = self.registry.advance_revision()?;
             if let Some(binding) = snapshot.default_playback_binding.as_mut() {
+                binding.identity = snapshot.identity.clone();
+            }
+            for binding in &mut snapshot.capture_bindings {
                 binding.identity = snapshot.identity.clone();
             }
         }
@@ -364,6 +382,39 @@ impl<S: PlaybackEndpointSource> PlaybackDiscovery<S> {
         binding: &PlaybackCaptureBinding,
     ) -> Result<(), DiscoveryError> {
         let current = self.refresh_default_playback_capture()?;
+        if &current != binding {
+            return Err(DiscoveryError::CaptureBindingStale);
+        }
+        Ok(())
+    }
+
+    pub(crate) fn refresh_explicit_playback_capture(
+        &mut self,
+        source_id: &SourceId,
+    ) -> Result<PlaybackCaptureBinding, DiscoveryError> {
+        let snapshot = self.refresh()?;
+        self.resolve_explicit_playback_capture(source_id, &snapshot)
+    }
+
+    pub(crate) fn resolve_explicit_playback_capture(
+        &self,
+        source_id: &SourceId,
+        snapshot: &PlaybackDiscoverySnapshot,
+    ) -> Result<PlaybackCaptureBinding, DiscoveryError> {
+        let resolved = self.resolve_explicit(source_id, snapshot)?;
+        snapshot
+            .capture_bindings
+            .iter()
+            .find(|binding| binding.source_id() == &resolved)
+            .cloned()
+            .ok_or(DiscoveryError::ExplicitSourceUnavailable)
+    }
+
+    pub(crate) fn revalidate_explicit_playback_capture(
+        &mut self,
+        binding: &PlaybackCaptureBinding,
+    ) -> Result<(), DiscoveryError> {
+        let current = self.refresh_explicit_playback_capture(binding.source_id())?;
         if &current != binding {
             return Err(DiscoveryError::CaptureBindingStale);
         }
@@ -675,6 +726,160 @@ mod tests {
         let binding = discovery.refresh_default_playback_capture().unwrap();
         assert_ne!(binding.source_id().as_str(), "default-playback");
         assert_eq!(binding.endpoint_id(), "endpoint-a");
+    }
+
+    #[test]
+    fn explicit_capture_binds_exact_source_even_when_another_source_is_default() {
+        let directory = TestDirectory::new();
+        let mut discovery = PlaybackDiscovery::new(
+            &directory.0,
+            FakeEndpointSource {
+                observations: vec![
+                    stable_endpoint(
+                        "endpoint-a",
+                        "v1",
+                        "Duplicate",
+                        PlaybackEndpointState::Active,
+                        false,
+                    ),
+                    stable_endpoint(
+                        "endpoint-b",
+                        "v1",
+                        "Duplicate",
+                        PlaybackEndpointState::Active,
+                        true,
+                    ),
+                ],
+            },
+        )
+        .unwrap();
+
+        let snapshot = discovery.refresh().unwrap();
+        let source_a = snapshot.sources()[0].source_id().clone();
+        let source_b = snapshot.sources()[1].source_id().clone();
+        let explicit = discovery
+            .resolve_explicit_playback_capture(&source_a, &snapshot)
+            .unwrap();
+        let default = discovery
+            .resolve_default_playback_capture(&snapshot)
+            .unwrap();
+
+        assert_eq!(explicit.source_id(), &source_a);
+        assert_eq!(explicit.endpoint_id(), "endpoint-a");
+        assert_eq!(default.source_id(), &source_b);
+        assert_eq!(default.endpoint_id(), "endpoint-b");
+        assert_ne!(explicit, default);
+    }
+
+    #[test]
+    fn unavailable_explicit_capture_never_substitutes_the_current_default() {
+        let directory = TestDirectory::new();
+        let mut discovery = PlaybackDiscovery::new(
+            &directory.0,
+            FakeEndpointSource {
+                observations: vec![
+                    stable_endpoint(
+                        "endpoint-a",
+                        "v1",
+                        "A",
+                        PlaybackEndpointState::Active,
+                        false,
+                    ),
+                    stable_endpoint("endpoint-b", "v1", "B", PlaybackEndpointState::Active, true),
+                ],
+            },
+        )
+        .unwrap();
+        let initial = discovery.refresh().unwrap();
+        let source_a = source_id_named(&initial, "A");
+        let source_b = source_id_named(&initial, "B");
+
+        discovery
+            .endpoint_source_mut()
+            .observations
+            .retain(|observation| observation.display_name == "B");
+        let current = discovery.refresh().unwrap();
+
+        assert_eq!(
+            discovery
+                .resolve_default_playback_capture(&current)
+                .unwrap()
+                .source_id(),
+            &source_b
+        );
+        assert!(matches!(
+            discovery.resolve_explicit_playback_capture(&source_a, &current),
+            Err(DiscoveryError::Registry(RegistryError::SourceUnavailable))
+        ));
+    }
+
+    #[test]
+    fn unknown_and_retired_explicit_capture_ids_fail_closed() {
+        let directory = TestDirectory::new();
+        let mut discovery = PlaybackDiscovery::new(
+            &directory.0,
+            FakeEndpointSource {
+                observations: vec![stable_endpoint(
+                    "endpoint-a",
+                    "old",
+                    "A",
+                    PlaybackEndpointState::Active,
+                    true,
+                )],
+            },
+        )
+        .unwrap();
+        let initial = discovery.refresh().unwrap();
+        let retired = source_id_named(&initial, "A");
+        let unknown = SourceId::new("never-registered").unwrap();
+
+        assert!(matches!(
+            discovery.resolve_explicit_playback_capture(&unknown, &initial),
+            Err(DiscoveryError::Registry(RegistryError::UnknownSource))
+        ));
+
+        discovery.endpoint_source_mut().observations[0] = stable_endpoint(
+            "endpoint-a",
+            "new",
+            "A",
+            PlaybackEndpointState::Active,
+            true,
+        );
+        let current = discovery.refresh().unwrap();
+        assert!(matches!(
+            discovery.resolve_explicit_playback_capture(&retired, &current),
+            Err(DiscoveryError::Registry(RegistryError::SourceRetired))
+        ));
+    }
+
+    #[test]
+    fn explicit_capture_revalidation_rejects_any_stale_binding() {
+        let directory = TestDirectory::new();
+        let mut discovery = PlaybackDiscovery::new(
+            &directory.0,
+            FakeEndpointSource {
+                observations: vec![stable_endpoint(
+                    "endpoint-a",
+                    "v1",
+                    "A",
+                    PlaybackEndpointState::Active,
+                    false,
+                )],
+            },
+        )
+        .unwrap();
+        let snapshot = discovery.refresh().unwrap();
+        let source_a = source_id_named(&snapshot, "A");
+        let binding = discovery
+            .resolve_explicit_playback_capture(&source_a, &snapshot)
+            .unwrap();
+
+        discovery.endpoint_source_mut().observations[0].display_name = "Renamed".to_string();
+
+        assert!(matches!(
+            discovery.revalidate_explicit_playback_capture(&binding),
+            Err(DiscoveryError::CaptureBindingStale)
+        ));
     }
 
     #[test]

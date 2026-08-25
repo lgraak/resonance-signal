@@ -6,8 +6,8 @@ fn main() {
     use resonance_agent::windows::CaptureOwnerCompletion;
     use std::time::Duration;
 
-    let duration = match parse_duration(std::env::args().skip(1)) {
-        Ok(Some(duration)) => duration,
+    let options = match parse_options(std::env::args().skip(1)) {
+        Ok(Some(options)) => options,
         Ok(None) => return,
         Err(message) => {
             eprintln!("{message}");
@@ -15,7 +15,8 @@ fn main() {
         }
     };
 
-    let mut supervisor = CaptureSupervisor::new(print_lifecycle_event);
+    let mut supervisor =
+        CaptureSupervisor::for_source(options.source_intent, print_lifecycle_event);
     match supervisor.start() {
         Ok(CaptureSupervisorStart::Started) => {}
         Ok(CaptureSupervisorStart::StoppedBeforeStart) => {
@@ -28,7 +29,7 @@ fn main() {
         }
     }
 
-    std::thread::sleep(duration);
+    std::thread::sleep(options.duration);
     if let Err(error) = supervisor.stop(Duration::from_secs(2)) {
         eprintln!("Windows playback-loopback supervisor shutdown failed: {error}");
         std::process::exit(1);
@@ -88,33 +89,62 @@ fn print_lifecycle_event(event: resonance_api::contract::StreamEvent) {
 }
 
 #[cfg(windows)]
-fn parse_duration(
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DiagnosticOptions {
+    duration: std::time::Duration,
+    source_intent: resonance_agent::windows::PlaybackCaptureIntent,
+}
+
+#[cfg(windows)]
+fn parse_options(
     mut args: impl Iterator<Item = String>,
-) -> Result<Option<std::time::Duration>, String> {
+) -> Result<Option<DiagnosticOptions>, String> {
     const DEFAULT_SECONDS: u64 = 10;
-    let Some(argument) = args.next() else {
-        return Ok(Some(std::time::Duration::from_secs(DEFAULT_SECONDS)));
-    };
-    if argument == "--help" || argument == "-h" {
-        println!("Usage: resonance-agent [--duration-seconds <1..=3600>]");
-        return Ok(None);
+    let mut seconds = DEFAULT_SECONDS;
+    let mut source_intent = resonance_agent::windows::PlaybackCaptureIntent::DefaultPlayback;
+    let mut duration_seen = false;
+    let mut source_seen = false;
+    while let Some(argument) = args.next() {
+        match argument.as_str() {
+            "--help" | "-h" => {
+                println!(
+                    "Usage: resonance-agent [--duration-seconds <1..=3600>] [--source-id <opaque-id>]"
+                );
+                return Ok(None);
+            }
+            "--duration-seconds" if !duration_seen => {
+                duration_seen = true;
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--duration-seconds requires a value".to_string())?;
+                seconds = value
+                    .parse::<u64>()
+                    .map_err(|_| format!("invalid duration {value:?}"))?;
+                if !(1..=3600).contains(&seconds) {
+                    return Err("duration must be between 1 and 3600 seconds".to_string());
+                }
+            }
+            "--source-id" if !source_seen => {
+                source_seen = true;
+                let value = args
+                    .next()
+                    .ok_or_else(|| "--source-id requires an opaque SourceId".to_string())?;
+                let source_id = resonance_api::contract::SourceId::new(value)
+                    .map_err(|error| format!("invalid SourceId: {error}"))?;
+                source_intent =
+                    resonance_agent::windows::PlaybackCaptureIntent::Explicit(source_id);
+            }
+            "--duration-seconds" => {
+                return Err("--duration-seconds was supplied more than once".to_string())
+            }
+            "--source-id" => return Err("--source-id was supplied more than once".to_string()),
+            _ => return Err(format!("unknown argument {argument:?}")),
+        }
     }
-    if argument != "--duration-seconds" {
-        return Err(format!("unknown argument {argument:?}"));
-    }
-    let value = args
-        .next()
-        .ok_or_else(|| "--duration-seconds requires a value".to_string())?;
-    if args.next().is_some() {
-        return Err("unexpected arguments after --duration-seconds".to_string());
-    }
-    let seconds = value
-        .parse::<u64>()
-        .map_err(|_| format!("invalid duration {value:?}"))?;
-    if !(1..=3600).contains(&seconds) {
-        return Err("duration must be between 1 and 3600 seconds".to_string());
-    }
-    Ok(Some(std::time::Duration::from_secs(seconds)))
+    Ok(Some(DiagnosticOptions {
+        duration: std::time::Duration::from_secs(seconds),
+        source_intent,
+    }))
 }
 
 #[cfg(not(windows))]
@@ -138,30 +168,61 @@ mod tests {
 
     #[test]
     fn duration_defaults_to_ten_seconds() {
-        assert_eq!(parse_duration(args(&[])), Ok(Some(Duration::from_secs(10))));
+        assert_eq!(
+            parse_options(args(&[])),
+            Ok(Some(DiagnosticOptions {
+                duration: Duration::from_secs(10),
+                source_intent: resonance_agent::windows::PlaybackCaptureIntent::DefaultPlayback,
+            }))
+        );
     }
 
     #[test]
     fn duration_accepts_only_the_documented_range_and_shape() {
         assert_eq!(
-            parse_duration(args(&["--duration-seconds", "1"])),
-            Ok(Some(Duration::from_secs(1)))
+            parse_options(args(&["--duration-seconds", "1"])),
+            Ok(Some(DiagnosticOptions {
+                duration: Duration::from_secs(1),
+                source_intent: resonance_agent::windows::PlaybackCaptureIntent::DefaultPlayback,
+            }))
         );
         assert_eq!(
-            parse_duration(args(&["--duration-seconds", "3600"])),
-            Ok(Some(Duration::from_secs(3600)))
+            parse_options(args(&["--duration-seconds", "3600"])),
+            Ok(Some(DiagnosticOptions {
+                duration: Duration::from_secs(3600),
+                source_intent: resonance_agent::windows::PlaybackCaptureIntent::DefaultPlayback,
+            }))
         );
-        assert!(parse_duration(args(&["--duration-seconds", "0"]))
+        assert!(parse_options(args(&["--duration-seconds", "0"]))
             .unwrap_err()
             .contains("between 1 and 3600"));
-        assert!(parse_duration(args(&["--duration-seconds", "3601"]))
+        assert!(parse_options(args(&["--duration-seconds", "3601"]))
             .unwrap_err()
             .contains("between 1 and 3600"));
-        assert!(parse_duration(args(&["--unknown"]))
+        assert!(parse_options(args(&["--unknown"]))
             .unwrap_err()
             .contains("unknown argument"));
-        assert!(parse_duration(args(&["--duration-seconds", "10", "extra"]))
+        assert!(parse_options(args(&["--duration-seconds", "10", "extra"]))
             .unwrap_err()
-            .contains("unexpected arguments"));
+            .contains("unknown argument"));
+    }
+
+    #[test]
+    fn explicit_source_id_is_opaque_and_independent_of_duration_order() {
+        let parsed = parse_options(args(&[
+            "--source-id",
+            "opaque-source-a",
+            "--duration-seconds",
+            "2",
+        ]))
+        .unwrap()
+        .unwrap();
+        assert_eq!(parsed.duration, Duration::from_secs(2));
+        assert_eq!(
+            parsed.source_intent,
+            resonance_agent::windows::PlaybackCaptureIntent::Explicit(
+                resonance_api::contract::SourceId::new("opaque-source-a").unwrap()
+            )
+        );
     }
 }

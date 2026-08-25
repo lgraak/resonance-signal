@@ -232,7 +232,7 @@ This alternative is selected.
 
 ### Future implementation impact
 
-The implemented private Windows discovery layer enumerates active render endpoints, maps persistent `IMMDevice` endpoint IDs through the durable registry, resolves the console Default Playback role, and rejects stale or unsafe resolution. The portable consumer snapshot exposes platform-neutral descriptors without backend-native keys. The Windows capture adapter opens the exact endpoint from the revision-bound private mapping and reports its opaque `SourceId`; the PipeWire adapter must establish validated stable-property rules before explicit-source capture.
+The implemented private Windows discovery layer enumerates active render endpoints, maps persistent `IMMDevice` endpoint IDs through the durable registry, resolves the console Default Playback role and exact Explicit Source identities, and rejects stale or unsafe resolution. The portable consumer snapshot exposes platform-neutral descriptors without backend-native keys. The Windows capture adapter opens the exact endpoint from the intent-specific revision-bound private mapping and reports its opaque `SourceId`; the PipeWire adapter must establish validated stable-property rules before equivalent explicit-source capture.
 
 Tests will need to cover duplicate display names, metadata changes, default-role changes, disappearance/return with and without continuity, native-key reuse, mapping reset, stale discovery snapshots, invalid explicit IDs, and no-substitution behavior. Runtime work requires separate approval.
 

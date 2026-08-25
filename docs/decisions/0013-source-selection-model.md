@@ -62,7 +62,7 @@ Explicit Source means “capture the source identified by this opaque provider-a
 - If the same source returns and its identity can still be proven, a later attempt may resolve it and begins a new stream.
 - If identity continuity cannot be proven, the provider must require rediscovery and a new explicit intent rather than guess.
 
-The existing `Id(SourceId)` selector represents this intent at the consumer-contract boundary. Discovery and runtime explicit-source capture are deferred.
+The existing `Id(SourceId)` selector represents this intent at the consumer-contract boundary. Windows discovery and runtime explicit-source capture are implemented; consumer transport remains deferred.
 
 ## Source Identity Model
 
@@ -85,7 +85,7 @@ The provider must never reuse a `SourceId` for a different source within the sam
 
 ### Persistence expectations
 
-[ADR 0014](0014-source-discovery-and-identity-model.md) defines the identity domain as one provider installation on one host with one retained mapping namespace. Within that domain, implemented discovery preserves IDs across process restarts and temporary disappearance while native continuity remains proven. IDs are not portable across hosts, installations, mapping resets, operating-system reinstallations, or unproven backend re-enumeration. Windows registry storage and Default Playback runtime enforcement are implemented; other platform mappings remain deferred.
+[ADR 0014](0014-source-discovery-and-identity-model.md) defines the identity domain as one provider installation on one host with one retained mapping namespace. Within that domain, implemented discovery preserves IDs across process restarts and temporary disappearance while native continuity remains proven. IDs are not portable across hosts, installations, mapping resets, operating-system reinstallations, or unproven backend re-enumeration. Windows registry storage plus Default Playback and Explicit Source runtime enforcement are implemented; other platform mappings remain deferred.
 
 ## Lifecycle Semantics
 
@@ -141,7 +141,7 @@ For every started stream, the provider guarantees:
 - ordered lifecycle events when the source disappears, changes, or becomes unusable; and
 - platform-neutral source, stream, format, and error semantics.
 
-The provider now implements Windows playback discovery, persistent installation-scoped IDs, and capture-time Default Playback mapping. It does not guarantee automatic waiting or retry, endpoint watching, replacement-owner creation, explicit-source capture, or equivalent behavior on other platforms.
+The provider now implements Windows playback discovery, persistent installation-scoped IDs, and separate capture-time Default Playback and Explicit Source mappings. It does not guarantee automatic waiting or retry, endpoint watching, replacement-owner creation, or equivalent behavior on other platforms.
 
 ## Alternatives Considered
 
@@ -180,7 +180,7 @@ This alternative is selected.
 
 - Source discovery representation and durable identity scope are defined by ADR 0014, but enumeration and mapping persistence are not implemented.
 - Current Windows runtime exposes only default-playback capture and does not execute replacement or follow-default recovery.
-- Current Windows runtime reports the provider-mapped resolved endpoint `SourceId`; consumer explicit-source capture remains unavailable.
+- Current Windows runtime reports the provider-mapped resolved endpoint `SourceId` for both Default Playback and identity-pinned Explicit Source capture; consumer transport remains unavailable.
 - Exact equivalence between native identities across device removal, re-enumeration, process restart, or operating-system changes is platform-specific and unresolved.
 - Consumers must handle new stream identities whenever capture resumes, even if the same source returns.
 
