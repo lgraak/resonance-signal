@@ -1,7 +1,7 @@
 //! Transport-independent provider contract definitions.
 
 use std::error::Error;
-use std::fmt;
+use std::fmt::{self, Debug};
 
 pub use resonance_core::signal::{
     AudioFrame, ChannelCount, ChannelLayout, ChannelLevel, ChannelPosition, FrameTimestamp,
@@ -84,6 +84,30 @@ impl fmt::Display for IdentifierError {
 
 impl Error for IdentifierError {}
 
+/// An opaque equality-only freshness token for one discovery snapshot.
+///
+/// A revision identifies observed provider state, not a source. Consumers may
+/// compare revisions for equality but must not parse or order them.
+#[derive(Clone, Eq, PartialEq)]
+pub struct DiscoveryRevision(String);
+
+impl DiscoveryRevision {
+    pub fn new(value: impl Into<String>) -> Result<Self, IdentifierError> {
+        let value = value.into();
+        if value.trim().is_empty() {
+            return Err(IdentifierError::Empty);
+        }
+
+        Ok(Self(value))
+    }
+}
+
+impl Debug for DiscoveryRevision {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("DiscoveryRevision(<opaque>)")
+    }
+}
+
 /// A source category for presentation and policy decisions, not device lookup.
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -121,6 +145,163 @@ pub enum SignalProduct {
     /// Per-channel single-sided linear magnitude spectra.
     Spectrum,
 }
+
+/// A provider's point-in-time knowledge of source availability.
+#[non_exhaustive]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum SourceAvailability {
+    Available,
+    Unavailable,
+    Unknown,
+}
+
+/// Portable consumer-visible metadata for one provider-managed source.
+///
+/// Every field other than `source_id` is mutable snapshot metadata and must
+/// never be used as identity proof.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceDescriptor {
+    source_id: SourceId,
+    display_name: Option<String>,
+    kind: SourceKind,
+    availability: SourceAvailability,
+    supported_products: Vec<SignalProduct>,
+    default_roles: Vec<DefaultSource>,
+}
+
+impl SourceDescriptor {
+    pub fn new(
+        source_id: SourceId,
+        display_name: Option<String>,
+        kind: SourceKind,
+        availability: SourceAvailability,
+        supported_products: impl Into<Vec<SignalProduct>>,
+        default_roles: impl Into<Vec<DefaultSource>>,
+    ) -> Result<Self, DiscoveryContractError> {
+        if display_name
+            .as_ref()
+            .is_some_and(|name| name.trim().is_empty())
+        {
+            return Err(DiscoveryContractError::EmptyDisplayName);
+        }
+
+        let supported_products = supported_products.into();
+        if let Some(duplicate) = first_duplicate(&supported_products) {
+            return Err(DiscoveryContractError::DuplicateProduct(*duplicate));
+        }
+
+        let default_roles = default_roles.into();
+        if let Some(duplicate) = first_duplicate(&default_roles) {
+            return Err(DiscoveryContractError::DuplicateDefaultRole(*duplicate));
+        }
+
+        Ok(Self {
+            source_id,
+            display_name,
+            kind,
+            availability,
+            supported_products,
+            default_roles,
+        })
+    }
+
+    pub fn source_id(&self) -> &SourceId {
+        &self.source_id
+    }
+
+    pub fn display_name(&self) -> Option<&str> {
+        self.display_name.as_deref()
+    }
+
+    pub const fn kind(&self) -> SourceKind {
+        self.kind
+    }
+
+    pub const fn availability(&self) -> SourceAvailability {
+        self.availability
+    }
+
+    pub fn supported_products(&self) -> &[SignalProduct] {
+        &self.supported_products
+    }
+
+    pub fn default_roles(&self) -> &[DefaultSource] {
+        &self.default_roles
+    }
+
+    pub fn is_default_playback(&self) -> bool {
+        self.default_roles.contains(&DefaultSource::Playback)
+    }
+}
+
+/// A complete, owned, replaceable point-in-time discovery result.
+///
+/// Source ordering has no identity meaning. The snapshot does not reserve a
+/// source or guarantee that its metadata remains current.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiscoverySnapshot {
+    revision: DiscoveryRevision,
+    sources: Vec<SourceDescriptor>,
+}
+
+impl DiscoverySnapshot {
+    pub fn new(
+        revision: DiscoveryRevision,
+        sources: impl Into<Vec<SourceDescriptor>>,
+    ) -> Result<Self, DiscoveryContractError> {
+        let sources = sources.into();
+        for (index, source) in sources.iter().enumerate() {
+            if sources[..index]
+                .iter()
+                .any(|previous| previous.source_id == source.source_id)
+            {
+                return Err(DiscoveryContractError::DuplicateSource(
+                    source.source_id.clone(),
+                ));
+            }
+        }
+
+        Ok(Self { revision, sources })
+    }
+
+    pub fn revision(&self) -> &DiscoveryRevision {
+        &self.revision
+    }
+
+    pub fn sources(&self) -> &[SourceDescriptor] {
+        &self.sources
+    }
+}
+
+#[non_exhaustive]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DiscoveryContractError {
+    EmptyDisplayName,
+    DuplicateSource(SourceId),
+    DuplicateProduct(SignalProduct),
+    DuplicateDefaultRole(DefaultSource),
+}
+
+impl fmt::Display for DiscoveryContractError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyDisplayName => {
+                formatter.write_str("display name must be absent or non-empty")
+            }
+            Self::DuplicateSource(source_id) => {
+                write!(formatter, "duplicate discovery source {source_id:?}")
+            }
+            Self::DuplicateProduct(product) => {
+                write!(formatter, "duplicate supported product {product:?}")
+            }
+            Self::DuplicateDefaultRole(role) => {
+                write!(formatter, "duplicate default source role {role:?}")
+            }
+        }
+    }
+}
+
+impl Error for DiscoveryContractError {}
 
 /// A request for one or more products from one or more sources.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -417,6 +598,73 @@ mod tests {
     fn source_and_stream_identifiers_are_opaque_but_non_empty() {
         assert_eq!(SourceId::new("  "), Err(IdentifierError::Empty));
         assert_eq!(StreamId::new("stream-1").unwrap().as_str(), "stream-1");
+    }
+
+    #[test]
+    fn discovery_contract_is_owned_and_revision_is_opaque() {
+        let revision = DiscoveryRevision::new("private-provider-state").unwrap();
+        let descriptor = SourceDescriptor::new(
+            SourceId::new("source-1").unwrap(),
+            Some("Headset".to_string()),
+            SourceKind::Playback,
+            SourceAvailability::Available,
+            vec![SignalProduct::Waveform],
+            vec![DefaultSource::Playback],
+        )
+        .unwrap();
+        let snapshot = DiscoverySnapshot::new(revision.clone(), vec![descriptor]).unwrap();
+
+        assert_eq!(snapshot.revision(), &revision);
+        assert_eq!(snapshot.sources()[0].display_name(), Some("Headset"));
+        assert!(snapshot.sources()[0].is_default_playback());
+        assert_eq!(format!("{revision:?}"), "DiscoveryRevision(<opaque>)");
+        assert!(!format!("{snapshot:?}").contains("private-provider-state"));
+    }
+
+    #[test]
+    fn discovery_contract_rejects_ambiguous_set_membership() {
+        let source_id = SourceId::new("source-1").unwrap();
+        assert_eq!(
+            SourceDescriptor::new(
+                source_id.clone(),
+                Some(" ".to_string()),
+                SourceKind::Playback,
+                SourceAvailability::Unknown,
+                Vec::new(),
+                Vec::new(),
+            ),
+            Err(DiscoveryContractError::EmptyDisplayName)
+        );
+        assert_eq!(
+            SourceDescriptor::new(
+                source_id.clone(),
+                None,
+                SourceKind::Playback,
+                SourceAvailability::Unavailable,
+                vec![SignalProduct::Waveform, SignalProduct::Waveform],
+                Vec::new(),
+            ),
+            Err(DiscoveryContractError::DuplicateProduct(
+                SignalProduct::Waveform
+            ))
+        );
+
+        let descriptor = SourceDescriptor::new(
+            source_id,
+            None,
+            SourceKind::Playback,
+            SourceAvailability::Unavailable,
+            vec![SignalProduct::Waveform],
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(matches!(
+            DiscoverySnapshot::new(
+                DiscoveryRevision::new("revision").unwrap(),
+                vec![descriptor.clone(), descriptor]
+            ),
+            Err(DiscoveryContractError::DuplicateSource(_))
+        ));
     }
 
     #[test]

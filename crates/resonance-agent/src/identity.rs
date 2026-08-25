@@ -87,6 +87,13 @@ struct SourceRecord {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct KnownSource {
+    pub(crate) source_id: SourceId,
+    pub(crate) display_name: String,
+    pub(crate) is_available: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SourceObservation {
     pub(crate) display_name: String,
     pub(crate) continuity: ObservedContinuity,
@@ -346,6 +353,18 @@ impl<A: SourceIdAllocator> IdentityRegistry<A> {
             }),
             ObservedContinuity::Ambiguous(_) | ObservedContinuity::Unknown => None,
         }
+    }
+
+    pub(crate) fn known_sources(&self) -> Vec<KnownSource> {
+        self.entries
+            .values()
+            .filter(|entry| !entry.state.is_retired())
+            .map(|entry| KnownSource {
+                source_id: entry.id.clone(),
+                display_name: entry.display_name.clone(),
+                is_available: entry.state.is_live(),
+            })
+            .collect()
     }
 
     pub(crate) fn resolve(

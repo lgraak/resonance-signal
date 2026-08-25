@@ -133,19 +133,20 @@ mod tests {
         let mut discovery =
             PlaybackDiscovery::new(&directory.0, WindowsPlaybackEndpointSource::new()).unwrap();
         let first = discovery.refresh().unwrap();
+        let portable_first = first.to_portable().unwrap();
 
         println!(
-            "Windows playback discovery: namespace={}, revision={}, active endpoints={}",
-            first.namespace(),
-            first.revision(),
-            first.sources().len()
+            "Portable Windows playback discovery: descriptors={}",
+            portable_first.sources().len()
         );
-        for source in first.sources() {
+        for source in portable_first.sources() {
             println!(
-                "  source_id={} | default={} | name={}",
+                "  source_id={} | name={} | availability={:?} | default_playback={} | products={:?}",
                 source.source_id().as_str(),
+                source.display_name().unwrap_or("<unnamed>"),
+                source.availability(),
                 source.is_default_playback(),
-                source.display_name()
+                source.supported_products()
             );
         }
         if !first.sources().is_empty() {

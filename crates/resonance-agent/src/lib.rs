@@ -1,7 +1,7 @@
 //! Platform capture orchestration for the Resonance Signal provider.
 
 pub mod capture;
-// The discovery boundary remains private until the consumer descriptor API is approved.
+// Discovery operations remain agent-private until a consumer transport is selected.
 #[allow(dead_code)]
 mod discovery;
 #[allow(dead_code)]

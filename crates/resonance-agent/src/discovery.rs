@@ -3,7 +3,11 @@ use std::error::Error;
 use std::fmt::{self, Display};
 use std::path::Path;
 
-use resonance_api::contract::{SignalProduct, SourceId, SourceKind};
+use resonance_api::contract::{
+    DefaultSource, DiscoveryContractError, DiscoveryRevision,
+    DiscoverySnapshot as PortableDiscoverySnapshot, SignalProduct, SourceAvailability,
+    SourceDescriptor as PortableSourceDescriptor, SourceId, SourceKind,
+};
 
 use crate::identity::{
     ContinuityEvidence, DiscoverySnapshot as IdentitySnapshot, IdentityRegistry,
@@ -84,6 +88,39 @@ impl PlaybackDiscoverySnapshot {
     pub(crate) fn sources(&self) -> &[SourceDescriptor] {
         &self.sources
     }
+
+    pub(crate) fn to_portable(&self) -> Result<PortableDiscoverySnapshot, DiscoveryContractError> {
+        let revision = portable_revision(&self.identity);
+        let sources = self
+            .sources
+            .iter()
+            .map(|source| {
+                let display_name =
+                    (!source.display_name.trim().is_empty()).then(|| source.display_name.clone());
+                let availability = if source.is_available {
+                    SourceAvailability::Available
+                } else {
+                    SourceAvailability::Unavailable
+                };
+                let default_roles = source
+                    .is_default_playback
+                    .then_some(DefaultSource::Playback)
+                    .into_iter()
+                    .collect::<Vec<_>>();
+
+                PortableSourceDescriptor::new(
+                    source.source_id.clone(),
+                    display_name,
+                    source.source_kind,
+                    availability,
+                    source.supported_products.clone(),
+                    default_roles,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        PortableDiscoverySnapshot::new(revision, sources)
+    }
 }
 
 #[derive(Debug)]
@@ -91,6 +128,7 @@ pub(crate) enum DiscoveryError {
     EndpointEnumeration(String),
     ConflictingDefaultPlaybackEndpoints,
     DefaultPlaybackUnavailable,
+    PortableSnapshotStale,
     Registry(RegistryError),
 }
 
@@ -103,6 +141,9 @@ impl Display for DiscoveryError {
             }
             Self::DefaultPlaybackUnavailable => {
                 formatter.write_str("no active endpoint owns the default playback role")
+            }
+            Self::PortableSnapshotStale => {
+                formatter.write_str("portable discovery snapshot is stale")
             }
             Self::Registry(error) => error.fmt(formatter),
         }
@@ -197,23 +238,28 @@ impl<S: PlaybackEndpointSource> PlaybackDiscovery<S> {
 
         let revision_before_refresh = self.registry.revision();
         let identity = self.registry.apply_observations(&registry_observations)?;
-        let mut sources = Vec::with_capacity(describable.len());
-        for observation in describable {
-            if let Some(source_id) = self
-                .registry
-                .source_id_for_observation(&observation.continuity)
-            {
-                sources.push(SourceDescriptor {
-                    source_id,
-                    display_name: observation.display_name,
-                    source_kind: SourceKind::Playback,
-                    is_available: true,
-                    is_default_playback: observation.is_default_playback,
-                    supported_products: vec![SignalProduct::Waveform],
-                });
-            }
-        }
-        sources.sort_by(|left, right| left.source_id.as_str().cmp(right.source_id.as_str()));
+        let default_playback_source_id = describable
+            .iter()
+            .find(|observation| observation.is_default_playback)
+            .and_then(|observation| {
+                self.registry
+                    .source_id_for_observation(&observation.continuity)
+            });
+        let sources = self
+            .registry
+            .known_sources()
+            .into_iter()
+            .map(|known| SourceDescriptor {
+                is_default_playback: default_playback_source_id
+                    .as_ref()
+                    .is_some_and(|source_id| source_id == &known.source_id),
+                source_id: known.source_id,
+                display_name: known.display_name,
+                source_kind: SourceKind::Playback,
+                is_available: known.is_available,
+                supported_products: vec![SignalProduct::Waveform],
+            })
+            .collect();
 
         let mut snapshot = PlaybackDiscoverySnapshot { identity, sources };
         let reopened_without_registry_change =
@@ -255,6 +301,34 @@ impl<S: PlaybackEndpointSource> PlaybackDiscovery<S> {
             }
         }
     }
+
+    pub(crate) fn resolve_explicit_at_revision(
+        &self,
+        source_id: &SourceId,
+        revision: &DiscoveryRevision,
+    ) -> Result<SourceId, DiscoveryError> {
+        let current = self.registry.snapshot();
+        if &portable_revision(&current) != revision {
+            return Err(DiscoveryError::PortableSnapshotStale);
+        }
+
+        match self.registry.resolve(source_id, &current)? {
+            SourceResolution::Live(source_id) => Ok(source_id),
+            SourceResolution::Absent | SourceResolution::Retired | SourceResolution::Unknown => {
+                unreachable!("registry returns typed errors")
+            }
+        }
+    }
+}
+
+fn portable_revision(identity: &IdentitySnapshot) -> DiscoveryRevision {
+    DiscoveryRevision::new(format!(
+        "{}|{}|{}",
+        identity.namespace.len(),
+        identity.namespace,
+        identity.revision
+    ))
+    .expect("a provider discovery revision is always non-empty")
 }
 
 fn stable_continuity_counts(
@@ -360,11 +434,19 @@ mod tests {
         let mut discovery = PlaybackDiscovery::new(&directory.0, source).unwrap();
 
         let snapshot = discovery.refresh().unwrap();
+        let portable = snapshot.to_portable().unwrap();
 
         assert_eq!(snapshot.sources().len(), 2);
         assert_ne!(
             snapshot.sources()[0].source_id(),
             snapshot.sources()[1].source_id()
+        );
+        assert_eq!(portable.sources().len(), 2);
+        assert_eq!(portable.sources()[0].display_name(), Some("Headset"));
+        assert_eq!(portable.sources()[1].display_name(), Some("Headset"));
+        assert_ne!(
+            portable.sources()[0].source_id(),
+            portable.sources()[1].source_id()
         );
     }
 
@@ -389,9 +471,12 @@ mod tests {
 
         discovery.endpoint_source_mut().observations[0].display_name = "Renamed".to_string();
         let after = discovery.refresh().unwrap();
+        let portable = after.to_portable().unwrap();
 
         assert_eq!(source_id, source_id_named(&after, "Renamed"));
         assert!(after.revision() > before.revision());
+        assert_eq!(portable.sources()[0].source_id(), &source_id);
+        assert_eq!(portable.sources()[0].display_name(), Some("Renamed"));
     }
 
     #[test]
@@ -415,11 +500,24 @@ mod tests {
         discovery.endpoint_source_mut().observations[0].is_default_playback = false;
         discovery.endpoint_source_mut().observations[1].is_default_playback = true;
         let after = discovery.refresh().unwrap();
+        let portable = after.to_portable().unwrap();
 
         assert_eq!(source_id_named(&after, "A"), a);
         assert_eq!(source_id_named(&after, "B"), b);
         assert_eq!(discovery.resolve_default_playback(&after).unwrap(), b);
         assert!(after.revision() > before.revision());
+        assert!(!portable
+            .sources()
+            .iter()
+            .find(|source| source.source_id() == &a)
+            .unwrap()
+            .is_default_playback());
+        assert!(portable
+            .sources()
+            .iter()
+            .find(|source| source.source_id() == &b)
+            .unwrap()
+            .is_default_playback());
     }
 
     #[test]
@@ -484,7 +582,16 @@ mod tests {
 
         discovery.endpoint_source_mut().observations.clear();
         let absent = discovery.refresh().unwrap();
-        assert!(absent.sources().is_empty());
+        let portable_absent = absent.to_portable().unwrap();
+        assert_eq!(absent.sources().len(), 1);
+        assert!(!absent.sources()[0].is_available());
+        assert!(!absent.sources()[0].is_default_playback());
+        assert_eq!(portable_absent.sources().len(), 1);
+        assert_eq!(portable_absent.sources()[0].source_id(), &source_id);
+        assert_eq!(
+            portable_absent.sources()[0].availability(),
+            SourceAvailability::Unavailable
+        );
         assert!(matches!(
             discovery.resolve_explicit(&source_id, &absent),
             Err(DiscoveryError::Registry(RegistryError::SourceUnavailable))
@@ -608,8 +715,10 @@ mod tests {
         .unwrap();
         let stale = discovery.refresh().unwrap();
         let source_id = source_id_named(&stale, "A");
+        let portable_stale = stale.to_portable().unwrap();
         discovery.endpoint_source_mut().observations[0].display_name = "Renamed".to_string();
-        let _current = discovery.refresh().unwrap();
+        let current = discovery.refresh().unwrap();
+        let portable_current = current.to_portable().unwrap();
 
         assert!(matches!(
             discovery.resolve_explicit(&source_id, &stale),
@@ -617,6 +726,17 @@ mod tests {
                 RegistryError::SnapshotStale { .. }
             ))
         ));
+        assert_ne!(portable_stale.revision(), portable_current.revision());
+        assert!(matches!(
+            discovery.resolve_explicit_at_revision(&source_id, portable_stale.revision()),
+            Err(DiscoveryError::PortableSnapshotStale)
+        ));
+        assert_eq!(
+            discovery
+                .resolve_explicit_at_revision(&source_id, portable_current.revision())
+                .unwrap(),
+            source_id
+        );
     }
 
     #[test]
@@ -670,5 +790,60 @@ mod tests {
         let second = discovery.refresh().unwrap();
 
         assert_eq!(first.revision(), second.revision());
+        assert_eq!(
+            first.to_portable().unwrap().revision(),
+            second.to_portable().unwrap().revision()
+        );
+    }
+
+    #[test]
+    fn portable_snapshot_is_sanitized_owned_and_capability_conservative() {
+        let directory = TestDirectory::new();
+        let native_endpoint_id = "{private-wasapi-endpoint-id}";
+        let continuity_token = "private-continuity-evidence";
+        let mut discovery = PlaybackDiscovery::new(
+            &directory.0,
+            FakeEndpointSource {
+                observations: vec![stable_endpoint(
+                    native_endpoint_id,
+                    continuity_token,
+                    "Original",
+                    PlaybackEndpointState::Active,
+                    true,
+                )],
+            },
+        )
+        .unwrap();
+
+        let private_before = discovery.refresh().unwrap();
+        let portable_before = private_before.to_portable().unwrap();
+        discovery.endpoint_source_mut().observations[0].display_name = "Renamed".to_string();
+        let private_after = discovery.refresh().unwrap();
+        let portable_after = private_after.to_portable().unwrap();
+
+        assert_eq!(
+            portable_before.sources()[0].display_name(),
+            Some("Original")
+        );
+        assert_eq!(portable_after.sources()[0].display_name(), Some("Renamed"));
+        assert_eq!(
+            portable_before.sources()[0].source_id(),
+            portable_after.sources()[0].source_id()
+        );
+        assert_ne!(portable_before.revision(), portable_after.revision());
+        assert_eq!(
+            portable_after.sources()[0].supported_products(),
+            &[SignalProduct::Waveform]
+        );
+        assert_eq!(portable_after.sources()[0].kind(), SourceKind::Playback);
+        assert_eq!(
+            portable_after.sources()[0].availability(),
+            SourceAvailability::Available
+        );
+        assert!(portable_after.sources()[0].is_default_playback());
+
+        let consumer_debug = format!("{portable_after:?}");
+        assert!(!consumer_debug.contains(native_endpoint_id));
+        assert!(!consumer_debug.contains(continuity_token));
     }
 }

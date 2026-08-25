@@ -240,13 +240,21 @@
 - Validated the real Arrakis endpoint set without modifying devices: one active endpoint, `Realtek Digital Output (Realtek USB Audio)`, owned Default Playback; immediate refresh and registry reopen retained its opaque `SourceId`.
 - Kept the discovery snapshot private. Consumer descriptors/transport, capture-time registry integration, explicit-source capture, endpoint watching, microphone discovery, PipeWire, UI, InfoPanel, and recovery execution remain deferred.
 
+## Milestone 6R: Consumer source discovery contract
+
+- Added owned portable `DiscoverySnapshot`, opaque equality-only `DiscoveryRevision`, `SourceDescriptor`, and three-state `SourceAvailability` types to `resonance-api` without selecting serialization or transport.
+- Represented mutable display names, source kind, supported signal products, and point-in-time default roles separately from opaque `SourceId`; duplicate names remain distinct and Default Playback remains role intent rather than a synthetic ID.
+- Converted the private Windows playback snapshot in `resonance-agent` into the portable contract while stripping endpoint IDs, continuity evidence, registry namespaces, tombstones, schemas, and storage details.
+- Retained known non-retired absent playback sources as `Unavailable`, advertised only the proven `Waveform` product, and preserved revision equality plus private stale-resolution rejection and exact-ID no-substitution behavior.
+- Kept capture-time Default Playback mapping, explicit-source capture, endpoint watching, transport, serialization, UI, InfoPanel, microphone discovery, PipeWire, and recovery execution deferred.
+
 ## Later milestones
 
 - Execute the accepted measurement plan, collect representative operational evidence, and review candidate failure classes without enabling recovery.
 - Select exact retry, cooldown, backoff, jitter, and stable-run values only from accepted evidence; define deterministic delay calculation and jitter sampling; and design a configuration source/reload boundary in separately scoped milestones.
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
-- Define and implement consumer discovery descriptors over the proven private Windows source snapshot, then wire mapped Default Playback and explicit `SourceId` resolution into capture as separately scoped work.
+- Wire mapped Default Playback into capture, then implement explicit `SourceId` playback capture as separately scoped work.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
 

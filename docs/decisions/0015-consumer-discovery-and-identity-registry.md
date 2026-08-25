@@ -269,9 +269,9 @@ This alternative is selected.
 
 ### Implementation impact
 
-`resonance-agent` now includes the private registry boundary and transactional storage implementation, including namespace and ID allocation, permanent tombstones, migration handling, reset, and fake-backend/fault-injection seams. The Windows discovery adapter supplies persistent `IMMDevice` endpoint IDs as private evidence, enumerates active render endpoints, resolves the console default role, and uses private revision-aware snapshots for exact-ID revalidation. Consumer-facing snapshot and descriptor types, transport preconditions, and capture-time revalidation remain future work.
+`resonance-api` now represents the consumer contract with owned `DiscoverySnapshot` and `SourceDescriptor` values, an opaque equality-only `DiscoveryRevision`, three-state `SourceAvailability`, duplicate-free supported-product and default-role sets, and no transport or serialization commitment. `resonance-agent` owns the private registry boundary and transactional storage implementation, including namespace and ID allocation, permanent tombstones, migration handling, reset, and fake-backend/fault-injection seams. The Windows discovery adapter supplies persistent `IMMDevice` endpoint IDs as private evidence, enumerates active render endpoints, resolves the console default role, retains known absent playback sources as unavailable, and converts private revision-aware snapshots to the portable value without native evidence or registry internals. Capture-time revalidation and consumer transport remain future work.
 
-Milestones 6P and 6Q implement durable registry persistence, continuity fallback, and private Windows playback discovery. Public API, public storage schema, transport, capture integration, endpoint watching, and consumer-visible runtime behavior remain deferred.
+Milestones 6P, 6Q, and 6R implement durable registry persistence, continuity fallback, private Windows playback discovery, and the portable Rust discovery contract. Public storage schema, transport, capture integration, endpoint watching, and consumer-visible service behavior remain deferred.
 
 ## Deferred Decisions
 
