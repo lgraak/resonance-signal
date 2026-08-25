@@ -33,9 +33,9 @@ struct PersistedSourceRecord {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct ContinuityEvidence {
-    backend_key: String,
-    continuity_token: String,
+pub(crate) struct ContinuityEvidence {
+    pub(crate) backend_key: String,
+    pub(crate) continuity_token: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -166,7 +166,7 @@ pub(crate) trait SourceIdAllocator {
 }
 
 #[derive(Clone)]
-struct CounterSourceIdAllocator;
+pub(crate) struct CounterSourceIdAllocator;
 
 impl SourceIdAllocator for CounterSourceIdAllocator {
     fn next_source_id(&mut self, namespace: &str, sequence: u64) -> String {
@@ -282,7 +282,7 @@ impl<A: SourceIdAllocator> IdentityRegistry<A> {
     }
 
     fn new_blank(storage_directory: PathBuf, allocator: A) -> Result<Self, RegistryError> {
-        let mut registry = Self {
+        let registry = Self {
             namespace: generate_namespace(),
             revision: 1,
             next_source_sequence: 0,
@@ -309,6 +309,19 @@ impl<A: SourceIdAllocator> IdentityRegistry<A> {
         }
     }
 
+    pub(crate) fn validate_snapshot(
+        &self,
+        snapshot: &DiscoverySnapshot,
+    ) -> Result<(), RegistryError> {
+        if snapshot.namespace != self.namespace || snapshot.revision != self.revision {
+            return Err(RegistryError::SnapshotStale {
+                expected: self.revision,
+                observed: snapshot.revision,
+            });
+        }
+        Ok(())
+    }
+
     pub(crate) fn source_id_for_continuity(
         &self,
         continuity: &ContinuityEvidence,
@@ -319,17 +332,28 @@ impl<A: SourceIdAllocator> IdentityRegistry<A> {
             .map(|entry| entry.id.clone())
     }
 
+    pub(crate) fn source_id_for_observation(
+        &self,
+        continuity: &ObservedContinuity,
+    ) -> Option<SourceId> {
+        match continuity {
+            ObservedContinuity::Stable {
+                backend_key,
+                continuity_token,
+            } => self.source_id_for_continuity(&ContinuityEvidence {
+                backend_key: backend_key.clone(),
+                continuity_token: continuity_token.clone(),
+            }),
+            ObservedContinuity::Ambiguous(_) | ObservedContinuity::Unknown => None,
+        }
+    }
+
     pub(crate) fn resolve(
         &self,
         source_id: &SourceId,
         snapshot: &DiscoverySnapshot,
     ) -> Result<SourceResolution, RegistryError> {
-        if snapshot.namespace != self.namespace || snapshot.revision != self.revision {
-            return Err(RegistryError::SnapshotStale {
-                expected: self.revision,
-                observed: snapshot.revision,
-            });
-        }
+        self.validate_snapshot(snapshot)?;
 
         match self.entries.get(source_id.as_str()) {
             None => Err(RegistryError::UnknownSource),
@@ -358,7 +382,11 @@ impl<A: SourceIdAllocator> IdentityRegistry<A> {
             .collect();
 
         for entry in self.entries.values_mut() {
-            if entry.state.is_live() {
+            let continuity_key = (
+                entry.continuity.backend_key.clone(),
+                entry.continuity.continuity_token.clone(),
+            );
+            if entry.state.is_live() && !observed_continuities.contains(&continuity_key) {
                 entry.state = SourceState::Absent;
                 changed = true;
             }
@@ -379,7 +407,10 @@ impl<A: SourceIdAllocator> IdentityRegistry<A> {
                             .entries
                             .get_mut(existing_id.as_str())
                             .expect("existing source exists in map");
-                        entry.state = SourceState::Live;
+                        if !entry.state.is_live() {
+                            entry.state = SourceState::Live;
+                            changed = true;
+                        }
                         if entry.display_name != observation.display_name {
                             entry.display_name = observation.display_name.clone();
                             changed = true;
@@ -403,7 +434,6 @@ impl<A: SourceIdAllocator> IdentityRegistry<A> {
                         .collect();
                     if reuse_candidates.len() == 1 {
                         self.retire(&reuse_candidates[0], RetiredReason::NativeKeyReuse);
-                        changed = true;
                     }
 
                     let source_id = self.allocate_source_id()?;
@@ -446,6 +476,12 @@ impl<A: SourceIdAllocator> IdentityRegistry<A> {
             self.persist()?;
         }
 
+        Ok(self.snapshot())
+    }
+
+    pub(crate) fn advance_revision(&mut self) -> Result<DiscoverySnapshot, RegistryError> {
+        self.revision = self.revision.saturating_add(1);
+        self.persist()?;
         Ok(self.snapshot())
     }
 

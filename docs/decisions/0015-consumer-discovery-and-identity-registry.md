@@ -269,15 +269,15 @@ This alternative is selected.
 
 ### Implementation impact
 
-`resonance-agent` now includes the private registry boundary and transactional storage implementation, including namespace and ID allocation, permanent tombstones, migration handling, reset, and fake-backend/fault-injection seams. Platform adapters must provide validated native evidence separately from presentation metadata. Consumer-facing snapshot and descriptor types, revision-aware selection preconditions, and current-state revalidation remain future discovery work.
+`resonance-agent` now includes the private registry boundary and transactional storage implementation, including namespace and ID allocation, permanent tombstones, migration handling, reset, and fake-backend/fault-injection seams. The Windows discovery adapter supplies persistent `IMMDevice` endpoint IDs as private evidence, enumerates active render endpoints, resolves the console default role, and uses private revision-aware snapshots for exact-ID revalidation. Consumer-facing snapshot and descriptor types, transport preconditions, and capture-time revalidation remain future work.
 
-This milestone implements durable registry persistence and continuity fallback behavior; public API, storage schema, discovery enumeration, platform adapters, transport, and runtime behavior changes remain deferred.
+Milestones 6P and 6Q implement durable registry persistence, continuity fallback, and private Windows playback discovery. Public API, public storage schema, transport, capture integration, endpoint watching, and consumer-visible runtime behavior remain deferred.
 
 ## Deferred Decisions
 
 - storage schema migration and transport encoding strategy;
-- discovery enumeration, filtering, paging, change notification, and Rust or transport representation;
-- Windows endpoint evidence mapping and resolved-source implementation;
+- discovery paging, change notification, and public Rust or transport representation;
+- Windows capture integration with mapped Default Playback and explicit-source resolution;
 - PipeWire discovery, stable-property mapping, and Linux implementation;
 - UI, sorting, grouping, localization, and consumer source-selection flows;
 - InfoPanel integration;

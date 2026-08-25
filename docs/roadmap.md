@@ -224,13 +224,29 @@
 - Defined a deterministic fake-backend and fault-injection validation seam for duplicate names, metadata changes, proven and ambiguous return, native-key reuse, stale snapshots, no substitution, and persistence failures.
 - Kept enumeration, platform adapters, Rust API types, UI, InfoPanel integration, Linux implementation, and recovery behavior deferred.
 
+## Milestone 6P: Private source identity registry storage
+
+- Implemented the private installation-and-host namespace, opaque `SourceId` allocation, live/absent/retired mappings, permanent tombstones, revision gating, and atomic candidate/backup/current persistence in `resonance-agent`.
+- Preserved proven continuity across restart and compatible schema handling while failing closed on corruption, incompatible evidence, reset, native-key reuse, and ambiguous return.
+- Added deterministic allocator and fault-path tests without adding a serialization dependency or exposing registry schema, backend evidence, or storage paths through `resonance-api`.
+
+## Milestone 6Q: Windows WASAPI playback source discovery
+
+- Added explicit, bounded Windows render-endpoint refresh through the existing `wasapi` 0.24.0 dependency. Enumeration requests `DEVICE_STATE_ACTIVE` endpoints only and defensively rechecks state before mapping; microphone/capture endpoints are excluded.
+- Resolved the Windows console default-render role separately from endpoint identity and annotated only its current mapped descriptor. Moving the role changes discovery revision and resolution without changing either endpoint's `SourceId`.
+- Used private persistent `IMMDevice` endpoint IDs plus a versioned evidence-schema token as installation/host-scoped continuity evidence. Names, format, channel count, transport, and default status remain presentation or state only.
+- Reconciled active observations through the existing registry, preserving IDs across no-op refresh, metadata rename, temporary absence/proven return, and registry reopen while retiring or omitting unsafe ambiguous/native-key-reuse cases. Reopen advances snapshot freshness without changing proven source identity.
+- Added deterministic fake-source coverage for duplicate names, state filtering, rename, role movement, absence/return, ambiguity, native-key reuse, restart, stale snapshots, no substitution, and no-op revision behavior.
+- Validated the real Arrakis endpoint set without modifying devices: one active endpoint, `Realtek Digital Output (Realtek USB Audio)`, owned Default Playback; immediate refresh and registry reopen retained its opaque `SourceId`.
+- Kept the discovery snapshot private. Consumer descriptors/transport, capture-time registry integration, explicit-source capture, endpoint watching, microphone discovery, PipeWire, UI, InfoPanel, and recovery execution remain deferred.
+
 ## Later milestones
 
 - Execute the accepted measurement plan, collect representative operational evidence, and review candidate failure classes without enabling recovery.
 - Select exact retry, cooldown, backoff, jitter, and stable-run values only from accepted evidence; define deterministic delay calculation and jitter sampling; and design a configuration source/reload boundary in separately scoped milestones.
 - Implement recovery execution only under separate approval, preserving one-shot stale-decision validation, no-overlap ownership, and new-stream identity requirements.
 - Add microphone capture and the Linux PipeWire adapter only in separately scoped milestones.
-- Implemented private registry storage and fake-backend validation seam; next add discovery enumeration and validate Windows resolved-source mapping before explicit-source capture.
+- Define and implement consumer discovery descriptors over the proven private Windows source snapshot, then wire mapped Default Playback and explicit `SourceId` resolution into capture as separately scoped work.
 - Add optional FFT, spectrum, and frequency-band processing after practical requirements are defined.
 - Define an appropriate client transport only when contract requirements justify it.
 

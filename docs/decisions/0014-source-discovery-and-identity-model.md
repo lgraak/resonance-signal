@@ -228,20 +228,20 @@ This alternative is selected.
 - IDs are deliberately not portable across hosts or provider identity domains.
 - A source may receive a new ID after ambiguous re-enumeration even when a human considers it the same physical device.
 - Discovery snapshots can become stale immediately and do not reserve a source.
-- The current Rust API and Windows runtime do not yet implement discovery or resolved endpoint identity.
+- The public Rust API and Windows capture runtime do not yet expose discovery or report the resolved registry-backed endpoint identity. A private Windows discovery implementation now proves enumeration, mapping, and resolution semantics.
 
 ### Future implementation impact
 
-Future discovery implementation must introduce a consumer-facing discovered-source representation without exposing backend-native keys. `resonance-agent` must own a persistent mapping namespace, backend-specific continuity evidence, tombstone or retirement behavior, and attempt-time revalidation. The Windows adapter must report the mapped endpoint `SourceId` instead of `default-playback`; the PipeWire adapter must establish validated stable-property rules before explicit-source capture.
+The implemented private Windows discovery layer enumerates active render endpoints, maps persistent `IMMDevice` endpoint IDs through the durable registry, resolves the console Default Playback role, and rejects stale or unsafe resolution. Future consumer discovery work must expose platform-neutral descriptors without backend-native keys. The Windows capture adapter must still report the mapped endpoint `SourceId` instead of its legacy `default-playback` placeholder; the PipeWire adapter must establish validated stable-property rules before explicit-source capture.
 
 Tests will need to cover duplicate display names, metadata changes, default-role changes, disappearance/return with and without continuity, native-key reuse, mapping reset, stale discovery snapshots, invalid explicit IDs, and no-substitution behavior. Runtime work requires separate approval.
 
-No current Rust source, dependency, or runtime behavior changes as a result of this design milestone.
+The original design milestone changed no runtime behavior. Milestone 6Q subsequently implemented the private Windows discovery and identity-mapping boundary without changing capture behavior or adding dependencies.
 
 ## Deferred Decisions
 
-- discovery enumeration implementation, request filters, snapshot revisioning, and change delivery;
-- Windows adapter changes, endpoint-ID mapping validation, and explicit-source capture;
+- consumer discovery request filters, public snapshot representation, and change delivery;
+- Windows capture integration with mapped endpoint IDs and explicit-source capture;
 - the PipeWire adapter, stable-property selection, and default-sink/monitor mapping;
 - mapping storage format, location, retention, migration, repair, reset, and backup behavior;
 - UI and consumer presentation, sorting, grouping, and source selection flows;
