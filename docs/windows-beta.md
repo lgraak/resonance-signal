@@ -114,22 +114,22 @@ disabled unless the user explicitly wants it enabled after acceptance.
 - package contains only the executable, license, and beta README
 - diagnostics contain no audio, private endpoint identity, or secrets
 
-## Branding asset hook
+## Branding resources
 
-No approved icon or banner assets are currently present in the repository.
-The beta therefore uses the neutral Windows application icon in the tray and
-does not embed product artwork in the executable or README. A later branding
-pass can add the already-approved artwork at these paths without redesigning
-it:
+The approved Resonance Signal artwork is retained under the repository-owned
+branding directory:
 
 ```text
-assets/resonance-signal.ico
-assets/resonance-signal-tray.ico
-assets/resonance-signal-banner.png
+assets/branding/resonance-signal-icon.png
+assets/branding/resonance-signal-icon.ico
+assets/branding/resonance-signal-tray.ico
+assets/branding/resonance-signal-banner.png
 ```
 
-Executable resource embedding and README banner markup should be added only
-after those exact approved assets are committed.
+The Windows build embeds the application and tray ICO resources directly in
+`resonance-agent.exe`. The release ZIP therefore remains limited to the
+executable, license, and beta README; it has no runtime dependency on the
+source-tree artwork.
 
 ## Current limitations
 
@@ -139,4 +139,3 @@ after those exact approved assets are committed.
 - Local loopback clients only; no LAN binding, authentication, or TLS.
 - Playback capture only; no microphone capture.
 - Consumers are separate applications and are not packaged here.
-- The neutral Windows tray icon remains until approved assets are available.

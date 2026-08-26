@@ -285,8 +285,18 @@
 - Added capped local lifecycle diagnostics without audio or native identity data.
 - Added a source-free Windows x64 ZIP layout and release checklist.
 - Added tester-facing Windows beta setup and troubleshooting guidance.
-- Approved executable, tray, and README branding assets remain deferred until
-  those assets are committed to the repository.
+- Deferred executable, tray, and README branding until approved assets were
+  available in the repository.
+
+## Milestone 6V.1: Windows beta branding integration
+
+- Retained the approved full icon and wide banner in the repository-owned
+  branding directory.
+- Embedded multi-resolution application and tray icon resources directly in
+  `resonance-agent.exe`.
+- Added the approved banner near the top of the GitHub README.
+- Preserved the existing three-file Windows beta package layout and runtime
+  behavior.
 
 ## Later milestones
 

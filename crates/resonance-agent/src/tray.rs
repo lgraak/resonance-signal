@@ -19,15 +19,16 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     DispatchMessageW, GetCursorPos, GetMessageW, LoadIconW, MessageBoxW, PostMessageW,
     PostQuitMessage, RegisterClassW, SetForegroundWindow, ShowWindow, TrackPopupMenu,
-    TranslateMessage, CW_USEDEFAULT, IDI_APPLICATION, MB_ICONERROR, MB_OK, MF_CHECKED, MF_DISABLED,
-    MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG, SW_HIDE, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP,
-    WM_CONTEXTMENU, WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW,
+    TranslateMessage, CW_USEDEFAULT, MB_ICONERROR, MB_OK, MF_CHECKED, MF_DISABLED, MF_GRAYED,
+    MF_SEPARATOR, MF_STRING, MSG, SW_HIDE, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_CONTEXTMENU,
+    WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW,
 };
 
 use crate::startup::{RegistrationState, StartupRegistration};
 use crate::transport::{AgentServiceConfig, ManagedService, ManagedServiceState};
 
 const TRAY_ICON_ID: u32 = 1;
+const TRAY_ICON_RESOURCE_ID: u16 = 2;
 const TRAY_CALLBACK: u32 = WM_APP + 1;
 const COMMAND_STARTUP: usize = 1001;
 const COMMAND_EXIT: usize = 1002;
@@ -188,13 +189,21 @@ unsafe extern "system" fn window_proc(
 }
 
 unsafe fn add_tray_icon(window: HWND) -> Result<(), String> {
+    let instance = GetModuleHandleW(std::ptr::null());
+    if instance.is_null() {
+        return Err(last_error("resolve tray icon module"));
+    }
+    let icon_handle = LoadIconW(instance, resource_identifier(TRAY_ICON_RESOURCE_ID));
+    if icon_handle.is_null() {
+        return Err(last_error("load embedded tray icon"));
+    }
     let mut icon = NOTIFYICONDATAW {
         cbSize: size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: window,
         uID: TRAY_ICON_ID,
         uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
         uCallbackMessage: TRAY_CALLBACK,
-        hIcon: LoadIconW(std::ptr::null_mut(), IDI_APPLICATION),
+        hIcon: icon_handle,
         ..Default::default()
     };
     set_fixed_wide(&mut icon.szTip, "Resonance Signal");
@@ -202,6 +211,10 @@ unsafe fn add_tray_icon(window: HWND) -> Result<(), String> {
         return Err(last_error("add tray icon"));
     }
     Ok(())
+}
+
+const fn resource_identifier(identifier: u16) -> *const u16 {
+    identifier as usize as *const u16
 }
 
 unsafe fn update_tray_tooltip(window: HWND, text: &str) {
@@ -400,5 +413,10 @@ mod tests {
     fn diagnostics_live_outside_the_repository_under_local_app_data() {
         let path = diagnostics_path().expect("Windows test environment should define LOCALAPPDATA");
         assert!(path.ends_with(r"Resonance Signal\logs\resonance-signal.log"));
+    }
+
+    #[test]
+    fn tray_icon_uses_the_embedded_resource_identifier() {
+        assert_eq!(resource_identifier(TRAY_ICON_RESOURCE_ID) as usize, 2);
     }
 }

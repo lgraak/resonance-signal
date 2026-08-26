@@ -1,5 +1,13 @@
 # Resonance Signal
 
+<p align="center">
+  <img
+    src="assets/branding/resonance-signal-banner.png"
+    alt="Resonance Signal"
+    width="760"
+  />
+</p>
+
 Resonance Signal is a provider-neutral audio signal service. It captures local
 playback audio and exposes portable, normalized waveform data to independent
 consumer applications.

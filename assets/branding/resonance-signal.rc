@@ -1,0 +1,5 @@
+#define RESONANCE_SIGNAL_APP_ICON 1
+#define RESONANCE_SIGNAL_TRAY_ICON 2
+
+RESONANCE_SIGNAL_APP_ICON ICON "resonance-signal-icon.ico"
+RESONANCE_SIGNAL_TRAY_ICON ICON "resonance-signal-tray.ico"

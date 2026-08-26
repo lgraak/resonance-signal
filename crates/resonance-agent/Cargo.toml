@@ -6,6 +6,9 @@ license.workspace = true
 repository.workspace = true
 description = "Executable entry point for Resonance Signal"
 
+[target.'cfg(windows)'.build-dependencies]
+embed-resource = "=3.0.11"
+
 [dependencies]
 resonance-api = { path = "../resonance-api" }
 resonance-core = { path = "../resonance-core" }
