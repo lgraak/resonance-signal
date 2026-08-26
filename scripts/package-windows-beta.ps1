@@ -21,12 +21,36 @@ if ($LASTEXITCODE -ne 0 -or $rustHost -ne 'x86_64-pc-windows-msvc') {
 
 Push-Location $repositoryRoot
 try {
+    $metadataJson = & cargo metadata --locked --format-version 1 --no-deps
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cargo metadata failed with exit code $LASTEXITCODE."
+    }
+    $metadata = $metadataJson -join [System.Environment]::NewLine | ConvertFrom-Json
+    $agentPackages = @($metadata.packages | Where-Object { $_.name -eq 'resonance-agent' })
+    if ($agentPackages.Count -ne 1) {
+        throw "Expected exactly one resonance-agent package in Cargo metadata; found $($agentPackages.Count)."
+    }
+    $packageVersion = [string]$agentPackages[0].version
+    if ([string]::IsNullOrWhiteSpace($packageVersion)) {
+        throw 'Cargo metadata did not provide a resonance-agent package version.'
+    }
+
     & cargo build --release --locked -p resonance-agent
     if ($LASTEXITCODE -ne 0) {
         throw "Release build failed with exit code $LASTEXITCODE."
     }
 
-    $packageName = 'resonance-signal-windows-x64'
+    $releaseExecutable = Join-Path $repositoryRoot 'target\release\resonance-agent.exe'
+    $actualVersionOutput = (& $releaseExecutable --version) -join [System.Environment]::NewLine
+    if ($LASTEXITCODE -ne 0) {
+        throw "Built executable version check failed with exit code $LASTEXITCODE."
+    }
+    $expectedVersionOutput = "resonance-agent $packageVersion"
+    if ($actualVersionOutput.Trim() -cne $expectedVersionOutput) {
+        throw "Built executable version '$($actualVersionOutput.Trim())' does not match Cargo metadata '$expectedVersionOutput'."
+    }
+
+    $packageName = "resonance-signal-$packageVersion-windows-x64"
     $packageDirectory = Join-Path $outputRootPath $packageName
     $archivePath = Join-Path $outputRootPath "$packageName.zip"
     foreach ($target in @($packageDirectory, $archivePath)) {
@@ -41,7 +65,7 @@ try {
     }
 
     New-Item -ItemType Directory -Path $packageDirectory | Out-Null
-    Copy-Item -LiteralPath (Join-Path $repositoryRoot 'target\release\resonance-agent.exe') -Destination $packageDirectory
+    Copy-Item -LiteralPath $releaseExecutable -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination (Join-Path $packageDirectory 'LICENSE.txt')
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'packaging\windows-beta\README.txt') -Destination (Join-Path $packageDirectory 'README.txt')
     Compress-Archive -Path (Join-Path $packageDirectory '*') -DestinationPath $archivePath -CompressionLevel Optimal

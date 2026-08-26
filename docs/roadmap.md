@@ -298,6 +298,18 @@
 - Preserved the existing three-file Windows beta package layout and runtime
   behavior.
 
+## Milestone 6V.2: First beta release versioning and package naming
+
+- Established `0.1.0-beta.1` as the workspace-owned application prerelease
+  version while leaving consumer protocol version 1 unchanged.
+- Added Cargo-derived executable version output through
+  `resonance-agent.exe --version`.
+- Made the Windows packaging workflow derive and cross-check the Cargo,
+  executable, and versioned archive identity before producing
+  `resonance-signal-0.1.0-beta.1-windows-x64.zip`.
+- Documented the prerelease progression and intended tag, GitHub prerelease,
+  and versioned asset shape without creating or publishing them.
+
 ## Later milestones
 
 - Execute the accepted measurement plan, collect representative operational evidence, and review candidate failure classes without enabling recovery.

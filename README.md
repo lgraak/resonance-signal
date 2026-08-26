@@ -27,6 +27,11 @@ depend on it.
 not need Rust, Microsoft build tools, administrator access, or an installer.
 Linux/PipeWire remains planned after Windows consumer acceptance.
 
+The current beta version is `0.1.0-beta.1`. Its Windows archive is named
+`resonance-signal-0.1.0-beta.1-windows-x64.zip`. When reporting a problem,
+include the output of `resonance-agent.exe --version` so the exact build is
+unambiguous.
+
 Once a beta artifact has been published, download the latest Windows beta ZIP
 from this project's GitHub Releases, then:
 
@@ -244,6 +249,8 @@ It creates the tester-facing ZIP under `dist/`. See
 [Windows Beta Packaging and Validation](docs/windows-beta.md) for the exact
 layout and release checklist. The executable also retains bounded `capture`
 and `serve` diagnostics; run `resonance-agent.exe --help` for their options.
+The packaging workflow derives the archive version from Cargo metadata and
+verifies it against `resonance-agent.exe --version`.
 
 ## Run the local consumer service
 

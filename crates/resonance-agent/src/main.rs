@@ -20,6 +20,11 @@ fn dispatch(mut args: impl Iterator<Item = String>) -> Result<(), String> {
             resonance_agent::tray::run()
         }
         Some(command) if command == "capture" => run_diagnostic(parse_options(args)?),
+        Some(command) if command == "--version" || command == "-V" => {
+            ensure_no_more_arguments(args, "version")?;
+            print_version();
+            Ok(())
+        }
         Some(command) if command == "--help" || command == "-h" => {
             print_help();
             Ok(())
@@ -140,6 +145,11 @@ fn parse_serve_options(
         }
     }
     resonance_agent::transport::AgentServiceConfig::new(SocketAddr::new(host, port)).map(Some)
+}
+
+#[cfg(windows)]
+fn print_version() {
+    println!("resonance-agent {}", env!("CARGO_PKG_VERSION"));
 }
 
 #[cfg(windows)]

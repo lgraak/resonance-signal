@@ -7,6 +7,11 @@ The downloadable beta package targets 64-bit Windows on the
 The package is per-user, requires no installer or administrator access, and is
 not a Windows Service.
 
+The current application beta version is `0.1.0-beta.1`. This release version
+is independent of consumer protocol version 1. Future beta builds increment
+the prerelease suffix (`0.1.0-beta.2`, `0.1.0-beta.3`, and so on) until the
+stable `0.1.0` release.
+
 ## Runtime model
 
 Launching `resonance-agent.exe` from Explorer starts a user-session tray
@@ -60,15 +65,26 @@ The script runs a locked optimized build and creates:
 
 ```text
 dist\
-  resonance-signal-windows-x64\
+  resonance-signal-0.1.0-beta.1-windows-x64\
     resonance-agent.exe
     LICENSE.txt
     README.txt
-  resonance-signal-windows-x64.zip
+  resonance-signal-0.1.0-beta.1-windows-x64.zip
 ```
 
-`dist/` is generated release output and is excluded from Git. Publish the ZIP
-through GitHub Releases; do not commit it to the source repository.
+The script reads the `resonance-agent` version from Cargo metadata, builds the
+release executable, and requires its `--version` output to match before naming
+the directory and archive. `dist/` is generated release output and is excluded
+from Git. Publish versioned ZIP assets through GitHub Releases; do not commit
+them to the source repository.
+
+The intended first-beta publication shape is documented but not yet created:
+
+```text
+Git tag:        v0.1.0-beta.1
+GitHub Release: Resonance Signal v0.1.0-beta.1
+Asset:          resonance-signal-0.1.0-beta.1-windows-x64.zip
+```
 
 The runtime has no repository-relative files and the package contains no
 source tree, Cargo output other than the executable, private identity data, or
@@ -79,20 +95,22 @@ developer temporary files.
 Validate the extracted package rather than the executable in `target/`:
 
 1. Extract the ZIP to a new temporary directory outside the repository.
-2. Launch `resonance-agent.exe` as a normal user.
-3. Confirm the Resonance Signal notification-area icon and menu appear.
-4. Confirm the tray reports `Status: Running` and `127.0.0.1:48480` is the
+2. Run `resonance-agent.exe --version`, confirm `0.1.0-beta.1`, and retain
+   that output with any tester report.
+3. Launch `resonance-agent.exe` as a normal user.
+4. Confirm the Resonance Signal notification-area icon and menu appear.
+5. Confirm the tray reports `Status: Running` and `127.0.0.1:48480` is the
    only listener.
-5. Request `/v1/status` and confirm `status: ready` and
+6. Request `/v1/status` and confirm `status: ready` and
    `listener_scope: loopback`.
-6. Request `/v1/sources` and confirm a portable source snapshot is returned.
-7. Connect a waveform consumer and confirm lifecycle plus `RSWF` frames.
-8. Select Start with Windows; inspect the owned HKCU value and confirm it
+7. Request `/v1/sources` and confirm a portable source snapshot is returned.
+8. Connect a waveform consumer and confirm lifecycle plus `RSWF` frames.
+9. Select Start with Windows; inspect the owned HKCU value and confirm it
    exactly names the packaged executable.
-9. Select Start with Windows again; confirm the owned value is absent.
-10. Select Exit; confirm the process terminates, the listener closes, and the
+10. Select Start with Windows again; confirm the owned value is absent.
+11. Select Exit; confirm the process terminates, the listener closes, and the
     consumer session ends.
-11. Relaunch once and repeat the status and endpoint checks.
+12. Relaunch once and repeat the status and endpoint checks.
 
 Do not reboot solely to validate registration. Leave Start with Windows
 disabled unless the user explicitly wants it enabled after acceptance.
@@ -104,6 +122,7 @@ disabled unless the user explicitly wants it enabled after acceptance.
 - `cargo test --workspace`
 - `cargo doc --workspace --no-deps`
 - `git diff --check`
+- Cargo metadata, executable `--version`, and archive filename versions match
 - release script completes on `x86_64-pc-windows-msvc`
 - extracted package runs outside the repository
 - tray status reflects both successful startup and bind failure

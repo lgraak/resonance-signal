@@ -15,6 +15,7 @@ Diagnostics log:
   %LOCALAPPDATA%\Resonance Signal\logs\resonance-signal.log
 
 Command-line diagnostics remain available:
+  resonance-agent.exe --version
   resonance-agent.exe --help
   resonance-agent.exe capture --duration-seconds 10
   resonance-agent.exe serve
