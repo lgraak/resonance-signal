@@ -13,6 +13,68 @@ depend on it.
 > **The provider is the product. Consumers are clients.** Visualization and
 > consumer-specific presentation do not belong in this repository.
 
+## Windows beta: getting started
+
+**Supported beta platform: 64-bit Windows.** Testers using the packaged beta do
+not need Rust, Microsoft build tools, administrator access, or an installer.
+Linux/PipeWire remains planned after Windows consumer acceptance.
+
+Once a beta artifact has been published, download the latest Windows beta ZIP
+from this project's GitHub Releases, then:
+
+1. Extract the ZIP to a stable location.
+2. Launch `resonance-agent.exe`.
+3. Find Resonance Signal in the Windows notification area (including the
+   hidden-icons overflow if necessary).
+4. Open the tray menu and confirm `Status: Running`.
+5. Optionally select **Start with Windows**.
+6. Start a compatible consumer application.
+
+Normal launch starts the local service automatically; testers do not need to
+run `resonance-agent.exe serve`. The tray menu shows the actual service state,
+the fixed local endpoint, the per-user Start with Windows toggle, and Exit.
+
+These browser checks confirm different parts of the provider:
+
+- <http://127.0.0.1:48480/v1/status> proves that the loopback service is ready.
+- <http://127.0.0.1:48480/v1/sources> proves that Windows playback discovery
+  and the provider's private identity state are available through the portable
+  consumer contract.
+
+Start with Windows stores only the current quoted executable path in the
+current user's Windows startup settings and adds `--tray`. It requires no admin
+rights. If the extracted folder is moved, launch it from the new location and
+select the unchecked or stale Start with Windows item to update the owned
+entry. The checkbox is shown only when the entry exactly matches the current
+executable.
+
+Select **Exit** to stop accepting connections, close active sessions, stop the
+local service, remove the tray icon, and terminate the process.
+
+### Beta troubleshooting
+
+- **Tray icon missing:** check the notification-area overflow, then inspect
+  `%LOCALAPPDATA%\Resonance Signal\logs\resonance-signal.log`.
+- **Status reports startup failure:** another process may own port 48480. Exit
+  the other instance or service, then relaunch Resonance Signal. The diagnostics
+  log records the listener error and is capped at 1 MiB.
+- **No playback sources:** confirm Windows has an active playback device, then
+  request `/v1/sources`; a 503 response means discovery is unavailable.
+- **Consumer cannot connect:** confirm `/v1/status` works and that the consumer
+  uses `127.0.0.1:48480`, not a LAN address.
+- **Start with Windows is stale:** the executable moved after registration.
+  Select the item from the new executable to explicitly replace the owned
+  per-user entry.
+- **More diagnostics needed:** run `resonance-agent.exe capture
+  --duration-seconds 10` from a terminal. `resonance-agent.exe --help` lists
+  the retained diagnostic modes.
+
+The service is intentionally local-machine only and binds numeric loopback.
+It is not designed for LAN or Internet exposure. Compatible consumers are
+separate projects; their deployment is not part of this package. See
+[Windows Beta Packaging and Validation](docs/windows-beta.md) for the release
+layout and maintainer checklist.
+
 ## Current status
 
 | Area | Status |
@@ -25,6 +87,9 @@ depend on it.
 | Local HTTP and WebSocket consumer service | Implemented, loopback only |
 | Versioned binary waveform transport | Implemented |
 | Bounded independent consumer sessions | Implemented, up to 16 simultaneous sessions |
+| Windows tray/background runtime | Implemented |
+| Per-user Start with Windows | Implemented, explicit opt-in |
+| Windows beta ZIP packaging | Implemented for x64 |
 | Consumer protocol | Documented as version 1 |
 | InfoPanel consumer/plugin | Planned in a separate repository |
 | Linux/PipeWire capture | Planned |
@@ -40,8 +105,9 @@ mono or stereo representation. Resonance Signal never silently takes the first
 two channels or invents a downmix.
 
 Automatic recovery, endpoint watching, microphone capture, Linux capture,
-Windows service installation, browser UI, and non-loopback networking are not
-implemented. The current recovery policy remains deliberately disabled.
+Windows service installation, installer/update infrastructure, browser UI, and
+non-loopback networking are not implemented. The current recovery policy
+remains deliberately disabled.
 
 ## Architecture at a glance
 
@@ -160,12 +226,21 @@ The release executable is written to:
 target\release\resonance-agent.exe
 ```
 
-The executable can also run a bounded capture diagnostic. Run
-`resonance-agent.exe --help` for the supported diagnostic options.
+The release package is built with:
+
+```powershell
+.\scripts\package-windows-beta.ps1
+```
+
+It creates the tester-facing ZIP under `dist/`. See
+[Windows Beta Packaging and Validation](docs/windows-beta.md) for the exact
+layout and release checklist. The executable also retains bounded `capture`
+and `serve` diagnostics; run `resonance-agent.exe --help` for their options.
 
 ## Run the local consumer service
 
-Start the debug build:
+Normal no-argument launch starts the tray-managed service. Maintainers can
+still run the service directly in a console for diagnostics:
 
 ```powershell
 .\target\debug\resonance-agent.exe serve
@@ -183,7 +258,7 @@ Remote access is future work and requires a separate security design covering
 authentication, authorization, transport protection, abuse controls, firewall
 behavior, and deployment.
 
-You can also run the service without locating the built executable:
+The explicit service can also be run without locating the built executable:
 
 ```powershell
 cargo run -p resonance-agent -- serve
@@ -322,6 +397,8 @@ implemented yet.
 - [x] Explicit `SourceId` capture
 - [x] Local loopback consumer service
 - [x] Versioned external waveform protocol and diagnostic consumer
+- [x] Windows tray/background beta runtime and per-user startup control
+- [x] Reproducible Windows x64 beta ZIP layout
 
 ### Next validation
 
@@ -348,6 +425,7 @@ The detailed milestone history and provider backlog live in the
 | [API](docs/api.md) | Understand signal, identity, lifecycle, and failure semantics |
 | [Architecture](docs/architecture.md) | Understand crate ownership and internal provider design |
 | [Roadmap](docs/roadmap.md) | Review completed milestones and deferred provider work |
+| [Windows Beta](docs/windows-beta.md) | Package and validate the Windows beta runtime |
 | [Architecture decisions](docs/decisions/) | Read the accepted design records and tradeoffs |
 | [Contributing](CONTRIBUTING.md) | Follow repository contribution expectations |
 

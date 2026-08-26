@@ -6,7 +6,8 @@ This document is the complete integration contract for external Resonance Signal
 
 ## Connection
 
-Start the Windows provider from the repository root:
+Normal beta launch starts the tray-managed provider automatically. For a
+console diagnostic session from the repository root, use:
 
 ```text
 cargo run -p resonance-agent -- serve
@@ -14,7 +15,9 @@ cargo run -p resonance-agent -- serve
 
 The default listener is `127.0.0.1:48480`. `--host ::1` selects IPv6 loopback and `--port <1..=65535>` selects another port. The agent rejects wildcard and non-loopback addresses. The HTTP base path is `/v1`; the WebSocket path is `/v1/waveform`.
 
-Only one long-running agent process should own the installation's private identity registry. A service manager or installer is not part of Milestone 6U.
+Only one long-running agent process should own the installation's private
+identity registry and loopback port. The Windows beta tray process owns that
+user-session lifecycle; Windows Service installation remains out of scope.
 
 ## Protocol versioning
 

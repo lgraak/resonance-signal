@@ -15,13 +15,28 @@ fn dispatch(mut args: impl Iterator<Item = String>) -> Result<(), String> {
             Some(config) => resonance_agent::transport::run(config),
             None => Ok(()),
         },
+        Some(command) if command == "tray" || command == "--tray" => {
+            ensure_no_more_arguments(args, "tray")?;
+            resonance_agent::tray::run()
+        }
         Some(command) if command == "capture" => run_diagnostic(parse_options(args)?),
         Some(command) if command == "--help" || command == "-h" => {
             print_help();
             Ok(())
         }
         Some(argument) => run_diagnostic(parse_options(std::iter::once(argument).chain(args))?),
-        None => run_diagnostic(parse_options(std::iter::empty())?),
+        None => resonance_agent::tray::run(),
+    }
+}
+
+#[cfg(windows)]
+fn ensure_no_more_arguments(
+    mut args: impl Iterator<Item = String>,
+    mode: &str,
+) -> Result<(), String> {
+    match args.next() {
+        Some(argument) => Err(format!("unknown {mode} argument {argument:?}")),
+        None => Ok(()),
     }
 }
 
@@ -130,7 +145,7 @@ fn parse_serve_options(
 #[cfg(windows)]
 fn print_help() {
     println!(
-        "Usage:\n  resonance-agent serve [--host 127.0.0.1|::1] [--port <1..=65535>]\n  resonance-agent capture [--duration-seconds <1..=3600>] [--source-id <opaque-id>]"
+        "Usage:\n  resonance-agent [--tray]\n  resonance-agent serve [--host 127.0.0.1|::1] [--port <1..=65535>]\n  resonance-agent capture [--duration-seconds <1..=3600>] [--source-id <opaque-id>]"
     );
 }
 

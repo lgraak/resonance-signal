@@ -255,6 +255,20 @@ A future replacement would still require a new `StreamId`, frame index zero, and
 
 The semantic contract remains independent of delivery mechanics. Milestone 6U maps it to loopback HTTP/WebSocket under `/v1`: JSON carries complete discovery snapshots and lifecycle/error events, while a fixed versioned little-endian binary frame carries scheduled waveform windows. Each WebSocket owns an independent supervisor and bounded 16-item queue; the process accepts at most 16 sessions, and non-blocking enqueue plus two-second socket-write deadlines terminate only a slow client. Native identity and backend diagnostics remain private. ADR 0016 records the durable choice and `docs/consumer-protocol.md` is the wire authority.
 
+The Windows beta tray host also belongs to `resonance-agent`. A normal
+no-argument launch creates the tray presence and starts the existing local
+transport on a managed worker. Service startup success or bind failure is
+reported back to the tray; Exit signals graceful transport shutdown, which
+stops new accepts and active capture sessions before the process releases tray
+resources. The tray does not alter consumer protocol, capture ownership,
+identity, or recovery semantics.
+
+Per-user startup registration is an adapter over the Resonance Signal-owned
+`HKCU` Run value. Registration is enabled only by explicit user selection and
+is considered active only when its strict quoted command targets the current
+executable. Installer, updater, Windows Service, and admin-elevated lifecycle
+ownership remain outside the architecture.
+
 ## Raw and processed responsibility
 
 Resonance Signal always treats raw waveform data as the canonical flexibility boundary. Consumers may request only raw data and perform arbitrary analysis themselves.

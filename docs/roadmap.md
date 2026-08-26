@@ -276,6 +276,18 @@
 - Added consumer-complete protocol documentation, a dependency-free external Python diagnostic, focused transport tests, and ADR 0016.
 - Kept InfoPanel, browser UI, persistent consumer configuration, endpoint watching, automatic migration/recovery, Windows SCM installation, microphone/PipeWire, LAN listening, authentication, and TLS out of scope.
 
+## Milestone 6V: Windows beta UX and packaging
+
+- Made normal launch a tray-managed per-user runtime.
+- Added actual service startup/running/failure state to the tray menu.
+- Added truthful opt-in HKCU Start with Windows registration.
+- Bounded Exit around graceful listener and active-session shutdown.
+- Added capped local lifecycle diagnostics without audio or native identity data.
+- Added a source-free Windows x64 ZIP layout and release checklist.
+- Added tester-facing Windows beta setup and troubleshooting guidance.
+- Approved executable, tray, and README branding assets remain deferred until
+  those assets are committed to the repository.
+
 ## Later milestones
 
 - Execute the accepted measurement plan, collect representative operational evidence, and review candidate failure classes without enabling recovery.

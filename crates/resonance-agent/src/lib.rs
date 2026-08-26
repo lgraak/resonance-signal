@@ -16,7 +16,13 @@ pub(crate) mod retry_state;
 pub mod supervisor;
 
 #[cfg(windows)]
+pub mod startup;
+
+#[cfg(windows)]
 pub mod transport;
+
+#[cfg(windows)]
+pub mod tray;
 
 #[cfg(windows)]
 pub mod windows;

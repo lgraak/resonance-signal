@@ -2,7 +2,8 @@
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc as std_mpsc, Arc, Mutex};
+use std::thread;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade};
@@ -14,7 +15,7 @@ use axum::{Json, Router};
 use resonance_api::contract::{ErrorKind, RetryHint, SourceId, StreamEndReason, StreamEvent};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Notify};
 
 use crate::protocol::{
     discovery_json, service_error_json, startup_error_json, EncodedEvent, SessionEncoder,
@@ -31,6 +32,8 @@ const MAX_CLIENT_MESSAGE_BYTES: usize = 1_024;
 const SOCKET_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const CAPTURE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CAPTURE_STOP_TIMEOUT: Duration = Duration::from_secs(2);
+const SERVICE_START_TIMEOUT: Duration = Duration::from_secs(5);
+const SERVICE_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AgentServiceConfig {
@@ -62,6 +65,122 @@ impl Default for AgentServiceConfig {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ManagedServiceState {
+    Starting,
+    Running,
+    Stopping,
+    Stopped,
+    Failed(String),
+}
+
+pub struct ManagedService {
+    state: Arc<Mutex<ManagedServiceState>>,
+    shutting_down: Arc<AtomicBool>,
+    shutdown_notify: Arc<Notify>,
+    stopped_rx: std_mpsc::Receiver<()>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl ManagedService {
+    pub fn start(config: AgentServiceConfig) -> Result<Self, String> {
+        let state = Arc::new(Mutex::new(ManagedServiceState::Starting));
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let shutdown_notify = Arc::new(Notify::new());
+        let (started_tx, started_rx) = std_mpsc::sync_channel(1);
+        let (stopped_tx, stopped_rx) = std_mpsc::sync_channel(1);
+        let worker_state = state.clone();
+        let worker_shutting_down = shutting_down.clone();
+        let worker_notify = shutdown_notify.clone();
+        let worker = thread::Builder::new()
+            .name("resonance-signal-service".to_string())
+            .spawn(move || {
+                let result = run_managed(
+                    config,
+                    worker_state.clone(),
+                    worker_shutting_down,
+                    worker_notify,
+                    started_tx,
+                );
+                let mut current = worker_state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                if let Err(message) = result {
+                    *current = ManagedServiceState::Failed(message);
+                } else if !matches!(*current, ManagedServiceState::Failed(_)) {
+                    *current = ManagedServiceState::Stopped;
+                }
+                drop(current);
+                let _ = stopped_tx.send(());
+            })
+            .map_err(|error| format!("failed to start service worker: {error}"))?;
+
+        match started_rx.recv_timeout(SERVICE_START_TIMEOUT) {
+            Ok(Ok(())) => Ok(Self {
+                state,
+                shutting_down,
+                shutdown_notify,
+                stopped_rx,
+                worker: Some(worker),
+            }),
+            Ok(Err(message)) => {
+                let _ = worker.join();
+                Err(message)
+            }
+            Err(error) => {
+                shutting_down.store(true, Ordering::Release);
+                shutdown_notify.notify_one();
+                let _ = worker.join();
+                Err(format!(
+                    "service startup did not complete within 5 seconds: {error}"
+                ))
+            }
+        }
+    }
+
+    pub fn state(&self) -> ManagedServiceState {
+        self.state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    pub fn shutdown(&mut self) -> Result<(), String> {
+        if self.worker.is_none() {
+            return Ok(());
+        }
+        {
+            let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            if matches!(
+                *state,
+                ManagedServiceState::Running | ManagedServiceState::Starting
+            ) {
+                *state = ManagedServiceState::Stopping;
+            }
+        }
+        self.shutting_down.store(true, Ordering::Release);
+        self.shutdown_notify.notify_one();
+        self.stopped_rx
+            .recv_timeout(SERVICE_STOP_TIMEOUT)
+            .map_err(|error| format!("service did not stop within 5 seconds: {error}"))?;
+        if let Some(worker) = self.worker.take() {
+            worker
+                .join()
+                .map_err(|_| "service worker panicked during shutdown".to_string())?;
+        }
+        match self.state() {
+            ManagedServiceState::Failed(message) => Err(message),
+            _ => Ok(()),
+        }
+    }
+}
+
+impl Drop for ManagedService {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
+    }
+}
+
 #[derive(Clone)]
 struct AppState {
     active_sessions: Arc<AtomicUsize>,
@@ -71,10 +190,14 @@ struct AppState {
 
 impl AppState {
     fn new() -> Self {
+        Self::with_shutdown(Arc::new(AtomicBool::new(false)))
+    }
+
+    fn with_shutdown(shutting_down: Arc<AtomicBool>) -> Self {
         Self {
             active_sessions: Arc::new(AtomicUsize::new(0)),
             discovery_sequence: Arc::new(AtomicU64::new(1)),
-            shutting_down: Arc::new(AtomicBool::new(false)),
+            shutting_down,
         }
     }
 }
@@ -89,12 +212,7 @@ pub fn run(config: AgentServiceConfig) -> Result<(), String> {
 
 pub async fn serve(config: AgentServiceConfig) -> Result<(), String> {
     let state = AppState::new();
-    let app = Router::new()
-        .route("/v1/status", get(status))
-        .route("/v1/sources", get(sources))
-        .route("/v1/waveform", get(waveform))
-        .fallback(not_found)
-        .with_state(state.clone());
+    let app = router(state.clone());
     let listener = tokio::net::TcpListener::bind(config.listen())
         .await
         .map_err(|error| format!("failed to bind {}: {error}", config.listen()))?;
@@ -116,6 +234,64 @@ pub async fn serve(config: AgentServiceConfig) -> Result<(), String> {
         })
         .await
         .map_err(|error| format!("consumer service failed: {error}"))
+}
+
+fn run_managed(
+    config: AgentServiceConfig,
+    state: Arc<Mutex<ManagedServiceState>>,
+    shutting_down: Arc<AtomicBool>,
+    shutdown_notify: Arc<Notify>,
+    started_tx: std_mpsc::SyncSender<Result<(), String>>,
+) -> Result<(), String> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("failed to create service runtime: {error}"))?
+        .block_on(async move {
+            let app_state = AppState::with_shutdown(shutting_down.clone());
+            let app = router(app_state);
+            let listener = match tokio::net::TcpListener::bind(config.listen()).await {
+                Ok(listener) => listener,
+                Err(error) => {
+                    let message = format!("failed to bind {}: {error}", config.listen());
+                    let _ = started_tx.send(Err(message.clone()));
+                    return Err(message);
+                }
+            };
+            let local = match listener.local_addr() {
+                Ok(local) if local.ip().is_loopback() => local,
+                Ok(_) => {
+                    let message = "listener resolved to a non-loopback address".to_string();
+                    let _ = started_tx.send(Err(message.clone()));
+                    return Err(message);
+                }
+                Err(error) => {
+                    let message = format!("failed to inspect listener address: {error}");
+                    let _ = started_tx.send(Err(message.clone()));
+                    return Err(message);
+                }
+            };
+            *state.lock().unwrap_or_else(|error| error.into_inner()) = ManagedServiceState::Running;
+            let _ = started_tx.send(Ok(()));
+            println!("Resonance Signal consumer service listening on http://{local}/v1/");
+
+            axum::serve(listener, app)
+                .with_graceful_shutdown(async move {
+                    shutdown_notify.notified().await;
+                    shutting_down.store(true, Ordering::Release);
+                })
+                .await
+                .map_err(|error| format!("consumer service failed: {error}"))
+        })
+}
+
+fn router(state: AppState) -> Router {
+    Router::new()
+        .route("/v1/status", get(status))
+        .route("/v1/sources", get(sources))
+        .route("/v1/waveform", get(waveform))
+        .fallback(not_found)
+        .with_state(state)
 }
 
 async fn status(State(state): State<AppState>) -> Json<Value> {
@@ -525,5 +701,24 @@ mod tests {
         assert!(!is_stop_request(r#"{"type":"stop","extra":true}"#));
         assert!(!is_stop_request(r#"{"type":"start"}"#));
         assert!(!is_stop_request("not-json"));
+    }
+
+    #[test]
+    fn managed_service_reports_running_and_stops_cleanly() {
+        let mut service = ManagedService::start(AgentServiceConfig::loopback(0)).unwrap();
+        assert_eq!(service.state(), ManagedServiceState::Running);
+        service.shutdown().unwrap();
+        assert_eq!(service.state(), ManagedServiceState::Stopped);
+    }
+
+    #[test]
+    fn managed_service_reports_bind_failure_instead_of_running() {
+        let occupied = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = occupied.local_addr().unwrap();
+        let error = match ManagedService::start(AgentServiceConfig::new(address).unwrap()) {
+            Ok(_) => panic!("managed service unexpectedly bound an occupied address"),
+            Err(error) => error,
+        };
+        assert!(error.contains("failed to bind"));
     }
 }
