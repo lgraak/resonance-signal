@@ -29,7 +29,7 @@ Linux/PipeWire remains planned after Windows consumer acceptance.
 
 The current beta version is `0.1.0-beta.1`. Its Windows archive is named
 `resonance-signal-0.1.0-beta.1-windows-x64.zip`. When reporting a problem,
-include the output of `resonance-agent.exe --version` so the exact build is
+include the output of `resonance-agent-cli.exe --version` so the exact build is
 unambiguous.
 
 Once a beta artifact has been published, download the latest Windows beta ZIP
@@ -43,9 +43,11 @@ from this project's GitHub Releases, then:
 5. Optionally select **Start with Windows**.
 6. Start a compatible consumer application.
 
-Normal launch starts the local service automatically; testers do not need to
-run `resonance-agent.exe serve`. The tray menu shows the actual service state,
-the fixed local endpoint, the per-user Start with Windows toggle, and Exit.
+Normal launch starts the local service automatically without a shell or console
+window; testers do not need to run `resonance-agent-cli.exe serve`. The tray
+menu shows the actual service state, log-level controls, the diagnostics-folder
+action, the fixed local endpoint, the per-user Start with Windows toggle, and
+Exit.
 
 These browser checks confirm different parts of the provider:
 
@@ -70,7 +72,8 @@ local service, remove the tray icon, and terminate the process.
   `%LOCALAPPDATA%\Resonance Signal\logs\resonance-signal.log`.
 - **Status reports startup failure:** another process may own port 48480. Exit
   the other instance or service, then relaunch Resonance Signal. The diagnostics
-  log records the listener error and is capped at 1 MiB.
+  log records the listener error and rotates at 1 MiB while retaining two
+  bounded history files.
 - **No playback sources:** confirm Windows has an active playback device, then
   request `/v1/sources`; a 503 response means discovery is unavailable.
 - **Consumer cannot connect:** confirm `/v1/status` works and that the consumer
@@ -78,9 +81,9 @@ local service, remove the tray icon, and terminate the process.
 - **Start with Windows is stale:** the executable moved after registration.
   Select the item from the new executable to explicitly replace the owned
   per-user entry.
-- **More diagnostics needed:** run `resonance-agent.exe capture
-  --duration-seconds 10` from a terminal. `resonance-agent.exe --help` lists
-  the retained diagnostic modes.
+- **More diagnostics needed:** select Debug under **Log Level**, or run
+  `resonance-agent-cli.exe capture --duration-seconds 10` from a terminal.
+  `resonance-agent-cli.exe --help` lists the retained console modes.
 
 The service is intentionally local-machine only and binds numeric loopback.
 It is not designed for LAN or Internet exposure. Compatible consumers are
@@ -102,15 +105,16 @@ layout and maintainer checklist.
 | Bounded independent consumer sessions | Implemented, up to 16 simultaneous sessions |
 | Windows tray/background runtime | Implemented |
 | Per-user Start with Windows | Implemented, explicit opt-in |
+| Persistent Info/Debug diagnostics | Implemented, per-user and bounded |
 | Windows beta ZIP packaging | Implemented for x64 |
 | Consumer protocol | Documented as version 1 |
 | InfoPanel consumer/plugin | Planned in a separate repository |
 | Linux/PipeWire capture | Planned |
 
-Today, the `resonance-agent` executable, playback discovery, capture adapter,
-and local service are Windows-only. The core signal and consumer contracts are
-provider-independent; the selected Linux direction is a future PipeWire
-adapter behind the same public semantics.
+Today, the `resonance-agent` tray and CLI entry points, playback discovery,
+capture adapter, and local service are Windows-only. The core signal and
+consumer contracts are provider-independent; the selected Linux direction is a
+future PipeWire adapter behind the same public semantics.
 
 The current product ceiling is mono and two-channel stereo. Wider, spatial,
 and object-based sources are accepted only when the platform supplies a valid
@@ -225,6 +229,7 @@ The debug executable is written to:
 
 ```text
 target\debug\resonance-agent.exe
+target\debug\resonance-agent-cli.exe
 ```
 
 For an optimized build:
@@ -237,6 +242,7 @@ The release executable is written to:
 
 ```text
 target\release\resonance-agent.exe
+target\release\resonance-agent-cli.exe
 ```
 
 The release package is built with:
@@ -247,10 +253,12 @@ The release package is built with:
 
 It creates the tester-facing ZIP under `dist/`. See
 [Windows Beta Packaging and Validation](docs/windows-beta.md) for the exact
-layout and release checklist. The executable also retains bounded `capture`
-and `serve` diagnostics; run `resonance-agent.exe --help` for their options.
-The packaging workflow derives the archive version from Cargo metadata and
-verifies it against `resonance-agent.exe --version`.
+layout and release checklist. The console executable retains bounded `capture`
+and `serve` diagnostics; run `resonance-agent-cli.exe --help` for their
+options. The packaging workflow derives the archive version from Cargo metadata
+and verifies it against `resonance-agent-cli.exe --version`. It also verifies
+that the tray and CLI executables use the Windows GUI and console PE subsystems
+respectively.
 
 ## Run the local consumer service
 
@@ -258,7 +266,7 @@ Normal no-argument launch starts the tray-managed service. Maintainers can
 still run the service directly in a console for diagnostics:
 
 ```powershell
-.\target\debug\resonance-agent.exe serve
+.\target\debug\resonance-agent-cli.exe serve
 ```
 
 The default listener is:
@@ -276,7 +284,7 @@ behavior, and deployment.
 The explicit service can also be run without locating the built executable:
 
 ```powershell
-cargo run -p resonance-agent -- serve
+cargo run -p resonance-agent --bin resonance-agent-cli -- serve
 ```
 
 ## Quick sanity checks

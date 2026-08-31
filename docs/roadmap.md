@@ -310,6 +310,32 @@
 - Documented the prerelease progression and intended tag, GitHub prerelease,
   and versioned asset shape without creating or publishing them.
 
+## Milestone 6W: Windows beta stability and diagnostics
+
+- Made `resonance-agent.exe` a Windows GUI-subsystem tray runtime so normal
+  Explorer and Start with Windows launch allocate no console and require no
+  PowerShell, cmd, Windows Terminal, or script wrapper.
+- Moved synchronous `--help`, `--version`, `serve`, and `capture` behavior to
+  the separately packaged console-subsystem `resonance-agent-cli.exe`; both
+  entry points reuse the same `resonance-agent` provider implementation.
+- Reconciled the prior capped tray log into one project-owned per-user
+  diagnostics component with persisted Info/Debug selection, one current and
+  two rotated 1 MiB files, bounded messages, and durable lifecycle writes.
+- Added application, tray, service, bind, discovery, capture/session,
+  backpressure, startup-registration, diagnostics-folder, shutdown, and
+  orderly/error process-exit classifications without waveform or private
+  endpoint identity logging.
+- Added top-level Rust panic diagnostics with process, version, runtime mode,
+  high-level lifecycle state, location, message, and backtrace where available;
+  faults that bypass Rust panic handling remain a documented platform limit.
+- Added the native **Open Diagnostics Folder** action without shell scripting
+  and retained the exact direct per-user Start with Windows command.
+- Expanded the source-free Windows package from three to four files to include
+  the CLI executable and added package-time PE-subsystem verification.
+- Kept automatic restart, watchdogs, recovery execution, protocol changes,
+  installer work, release publication, consumers, and Linux/PipeWire out of
+  scope.
+
 ## Later milestones
 
 - Execute the accepted measurement plan, collect representative operational evidence, and review candidate failure classes without enabling recovery.

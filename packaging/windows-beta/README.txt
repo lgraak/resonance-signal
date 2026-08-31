@@ -2,7 +2,7 @@ Resonance Signal - Windows Beta
 ================================
 
 1. Keep all files together in a stable folder.
-2. Launch resonance-agent.exe.
+2. Launch resonance-agent.exe. It opens no console window.
 3. Find Resonance Signal in the Windows notification area.
 4. Open its tray menu and confirm Status: Running.
 5. Optionally select Start with Windows.
@@ -14,11 +14,11 @@ Local health checks:
 Diagnostics log:
   %LOCALAPPDATA%\Resonance Signal\logs\resonance-signal.log
 
-Command-line diagnostics remain available:
-  resonance-agent.exe --version
-  resonance-agent.exe --help
-  resonance-agent.exe capture --duration-seconds 10
-  resonance-agent.exe serve
+Command-line diagnostics use the dedicated console executable:
+  resonance-agent-cli.exe --version
+  resonance-agent-cli.exe --help
+  resonance-agent-cli.exe capture --duration-seconds 10
+  resonance-agent-cli.exe serve
 
 The service accepts local-machine loopback connections only. It is not
 intended for LAN or Internet exposure. Compatible consumers are separate

@@ -1,29 +1,26 @@
 //! Minimal native Windows tray host for the per-user beta runtime.
 
 use std::ffi::OsStr;
-use std::fs::{self, OpenOptions};
-use std::io::Write;
 use std::os::windows::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
-use windows_sys::Win32::System::Console::{GetConsoleProcessList, GetConsoleWindow};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Shell::{
-    Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY,
-    NOTIFYICONDATAW,
+    ShellExecuteW, Shell_NotifyIconW, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
+    NIM_MODIFY, NOTIFYICONDATAW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DestroyWindow,
     DispatchMessageW, GetCursorPos, GetMessageW, LoadIconW, MessageBoxW, PostMessageW,
-    PostQuitMessage, RegisterClassW, SetForegroundWindow, ShowWindow, TrackPopupMenu,
-    TranslateMessage, CW_USEDEFAULT, MB_ICONERROR, MB_OK, MF_CHECKED, MF_DISABLED, MF_GRAYED,
-    MF_SEPARATOR, MF_STRING, MSG, SW_HIDE, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_CONTEXTMENU,
+    PostQuitMessage, RegisterClassW, SetForegroundWindow, TrackPopupMenu, TranslateMessage,
+    CW_USEDEFAULT, MB_ICONERROR, MB_OK, MF_CHECKED, MF_DISABLED, MF_GRAYED, MF_SEPARATOR,
+    MF_STRING, MSG, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_APP, WM_CONTEXTMENU,
     WM_DESTROY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW,
 };
 
+use crate::diagnostics::{self, LogLevel};
 use crate::startup::{RegistrationState, StartupRegistration};
 use crate::transport::{AgentServiceConfig, ManagedService, ManagedServiceState};
 
@@ -32,9 +29,16 @@ const TRAY_ICON_RESOURCE_ID: u16 = 2;
 const TRAY_CALLBACK: u32 = WM_APP + 1;
 const COMMAND_STARTUP: usize = 1001;
 const COMMAND_EXIT: usize = 1002;
+const COMMAND_LOG_INFO: usize = 1003;
+const COMMAND_LOG_DEBUG: usize = 1004;
+const COMMAND_OPEN_DIAGNOSTICS: usize = 1005;
 const ENDPOINT: &str = "http://127.0.0.1:48480";
 
 static APP: OnceLock<Mutex<TrayState>> = OnceLock::new();
+
+pub fn show_fatal_error(message: &str) {
+    unsafe { show_error(std::ptr::null_mut(), message) };
+}
 
 struct TrayState {
     service: Option<ManagedService>,
@@ -52,8 +56,7 @@ impl TrayState {
             Some(ManagedServiceState::Running) => "Status: Running".to_string(),
             Some(ManagedServiceState::Stopping) => "Status: Stopping".to_string(),
             Some(ManagedServiceState::Stopped) => "Status: Stopped".to_string(),
-            Some(ManagedServiceState::Failed(message)) => {
-                log_message(&format!("local consumer service failed: {message}"));
+            Some(ManagedServiceState::Failed(_)) => {
                 "Status: Failed (see diagnostics log)".to_string()
             }
             None => "Status: Stopped".to_string(),
@@ -64,12 +67,16 @@ impl TrayState {
         StartupRegistration::current_user().state(&self.executable)
     }
 
-    fn toggle_startup(&mut self) -> Result<(), String> {
+    fn toggle_startup(&mut self) -> Result<&'static str, String> {
         let registration = StartupRegistration::current_user();
         match registration.state(&self.executable)? {
-            RegistrationState::Enabled => registration.disable(),
+            RegistrationState::Enabled => {
+                registration.disable()?;
+                Ok("disabled")
+            }
             RegistrationState::Missing | RegistrationState::Stale => {
-                registration.enable(&self.executable)
+                registration.enable(&self.executable)?;
+                Ok("enabled")
             }
         }
     }
@@ -83,17 +90,17 @@ impl TrayState {
 }
 
 pub fn run() -> Result<(), String> {
-    hide_explorer_console();
+    diagnostics::set_lifecycle_state("tray_initializing");
     let executable = std::env::current_exe()
         .map_err(|error| format!("failed to locate the current executable: {error}"))?;
-    log_message("tray launch requested");
+    diagnostics::info("tray_initialization_requested");
     let (service, startup_error) = match ManagedService::start(AgentServiceConfig::default()) {
         Ok(service) => {
-            log_message("local consumer service started on 127.0.0.1:48480");
+            diagnostics::info("service_startup_succeeded listener=127.0.0.1:48480 scope=loopback");
             (Some(service), None)
         }
         Err(error) => {
-            log_message(&format!("local consumer service startup failed: {error}"));
+            diagnostics::info(&format!("service_startup_failed error={error}"));
             (None, Some(error))
         }
     };
@@ -104,11 +111,13 @@ pub fn run() -> Result<(), String> {
     }))
     .map_err(|_| "tray runtime is already initialized".to_string())?;
 
+    diagnostics::set_lifecycle_state("tray_running");
+    diagnostics::info("tray_initialization_succeeded");
     let result = unsafe { run_message_loop() };
     if let Some(app) = APP.get() {
         let mut app = app.lock().unwrap_or_else(|error| error.into_inner());
         if let Err(error) = app.stop_service() {
-            log_message(&format!("service shutdown after tray exit failed: {error}"));
+            diagnostics::info(&format!("service_shutdown_failed error={error}"));
         }
     }
     result
@@ -271,6 +280,18 @@ unsafe fn show_menu(window: HWND) {
     append_text(menu, MF_STRING | MF_DISABLED | MF_GRAYED, 0, &service_label);
     append_text(menu, MF_STRING | MF_DISABLED | MF_GRAYED, 0, ENDPOINT);
     AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
+    append_text(menu, MF_STRING | MF_DISABLED | MF_GRAYED, 0, "Log Level");
+    let log_level = diagnostics::current_level();
+    let (info_flags, debug_flags) = log_level_flags(log_level);
+    append_text(menu, info_flags, COMMAND_LOG_INFO, "Info");
+    append_text(menu, debug_flags, COMMAND_LOG_DEBUG, "Debug");
+    append_text(
+        menu,
+        MF_STRING,
+        COMMAND_OPEN_DIAGNOSTICS,
+        "Open Diagnostics Folder",
+    );
+    AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
     let startup_flags = MF_STRING | if startup_enabled { MF_CHECKED } else { 0 };
     append_text(menu, startup_flags, COMMAND_STARTUP, startup_label);
     AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
@@ -290,21 +311,34 @@ unsafe fn show_menu(window: HWND) {
         ) as usize;
         let _ = PostMessageW(window, WM_NULL, 0, 0);
         match command {
-            COMMAND_STARTUP => {
-                if let Err(error) = app.toggle_startup() {
-                    log_message(&format!("startup registration change failed: {error}"));
+            COMMAND_STARTUP => match app.toggle_startup() {
+                Err(error) => {
+                    diagnostics::info(&format!("startup_registration_change_failed error={error}"));
+                    show_error(window, &error);
+                }
+                Ok(action) => diagnostics::info(&format!(
+                    "startup_registration_changed action={action} command=direct_executable_tray"
+                )),
+            },
+            COMMAND_LOG_INFO => set_log_level(window, LogLevel::Info),
+            COMMAND_LOG_DEBUG => set_log_level(window, LogLevel::Debug),
+            COMMAND_OPEN_DIAGNOSTICS => {
+                if let Err(error) = open_diagnostics_folder() {
+                    diagnostics::info(&format!("diagnostics_folder_open_failed error={error}"));
                     show_error(window, &error);
                 } else {
-                    log_message("startup registration changed by explicit tray selection");
+                    diagnostics::info("diagnostics_folder_opened mechanism=windows_shell");
                 }
             }
             COMMAND_EXIT => {
+                diagnostics::set_lifecycle_state("tray_exit_requested");
+                diagnostics::info("tray_exit_requested");
                 remove_tray_icon(window);
                 if let Err(error) = app.stop_service() {
-                    log_message(&format!("service shutdown failed: {error}"));
+                    diagnostics::info(&format!("service_shutdown_failed error={error}"));
                     show_error(window, &error);
                 } else {
-                    log_message("local consumer service stopped; tray exiting");
+                    diagnostics::info("service_shutdown_succeeded reason=tray_exit");
                 }
                 DestroyWindow(window);
             }
@@ -312,6 +346,41 @@ unsafe fn show_menu(window: HWND) {
         }
     }
     DestroyMenu(menu);
+}
+
+fn log_level_flags(level: LogLevel) -> (u32, u32) {
+    match level {
+        LogLevel::Info => (MF_STRING | MF_CHECKED, MF_STRING),
+        LogLevel::Debug => (MF_STRING, MF_STRING | MF_CHECKED),
+    }
+}
+
+unsafe fn set_log_level(window: HWND, level: LogLevel) {
+    if let Err(error) = diagnostics::set_level(level) {
+        diagnostics::info(&format!("log_level_change_failed error={error}"));
+        show_error(window, &error);
+    }
+}
+
+unsafe fn open_diagnostics_folder() -> Result<(), String> {
+    let directory = diagnostics::directory()?;
+    let directory = wide_null_os(directory.as_os_str());
+    let result = ShellExecuteW(
+        std::ptr::null_mut(),
+        std::ptr::null(),
+        directory.as_ptr(),
+        std::ptr::null(),
+        std::ptr::null(),
+        SW_SHOWNORMAL,
+    );
+    if result as isize <= 32 {
+        Err(format!(
+            "failed to open diagnostics directory: Windows shell result {}",
+            result as isize
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 unsafe fn append_text(menu: *mut core::ffi::c_void, flags: u32, id: usize, text: &str) {
@@ -330,56 +399,6 @@ unsafe fn show_error(window: HWND, message: &str) {
     );
 }
 
-fn diagnostics_path() -> Option<PathBuf> {
-    let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(
-        PathBuf::from(base)
-            .join("Resonance Signal")
-            .join("logs")
-            .join("resonance-signal.log"),
-    )
-}
-
-fn log_message(message: &str) {
-    const MAX_LOG_BYTES: u64 = 1_048_576;
-    let Some(path) = diagnostics_path() else {
-        return;
-    };
-    let Some(parent) = path.parent() else { return };
-    if fs::create_dir_all(parent).is_err() {
-        return;
-    }
-    let truncate = path
-        .metadata()
-        .is_ok_and(|metadata| metadata.len() >= MAX_LOG_BYTES);
-    let Ok(mut file) = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(!truncate)
-        .truncate(truncate)
-        .open(path)
-    else {
-        return;
-    };
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0);
-    let sanitized = message.replace(['\r', '\n'], " ");
-    let _ = writeln!(file, "{timestamp} {sanitized}");
-}
-
-fn hide_explorer_console() {
-    let mut processes = [0_u32; 2];
-    let count = unsafe { GetConsoleProcessList(processes.as_mut_ptr(), processes.len() as u32) };
-    if count == 1 {
-        let window = unsafe { GetConsoleWindow() };
-        if !window.is_null() {
-            unsafe { ShowWindow(window, SW_HIDE) };
-        }
-    }
-}
-
 fn set_fixed_wide<const N: usize>(target: &mut [u16; N], value: &str) {
     let encoded = OsStr::new(value).encode_wide().take(N.saturating_sub(1));
     for (slot, unit) in target.iter_mut().zip(encoded) {
@@ -388,10 +407,11 @@ fn set_fixed_wide<const N: usize>(target: &mut [u16; N], value: &str) {
 }
 
 fn wide_null(value: &str) -> Vec<u16> {
-    OsStr::new(value)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
+    wide_null_os(OsStr::new(value))
+}
+
+fn wide_null_os(value: &OsStr) -> Vec<u16> {
+    value.encode_wide().chain(std::iter::once(0)).collect()
 }
 
 fn last_error(operation: &str) -> String {
@@ -410,13 +430,19 @@ mod tests {
     }
 
     #[test]
-    fn diagnostics_live_outside_the_repository_under_local_app_data() {
-        let path = diagnostics_path().expect("Windows test environment should define LOCALAPPDATA");
-        assert!(path.ends_with(r"Resonance Signal\logs\resonance-signal.log"));
+    fn tray_icon_uses_the_embedded_resource_identifier() {
+        assert_eq!(resource_identifier(TRAY_ICON_RESOURCE_ID) as usize, 2);
     }
 
     #[test]
-    fn tray_icon_uses_the_embedded_resource_identifier() {
-        assert_eq!(resource_identifier(TRAY_ICON_RESOURCE_ID) as usize, 2);
+    fn tray_menu_checks_exactly_the_current_log_level() {
+        assert_eq!(
+            log_level_flags(LogLevel::Info),
+            (MF_STRING | MF_CHECKED, MF_STRING)
+        );
+        assert_eq!(
+            log_level_flags(LogLevel::Debug),
+            (MF_STRING, MF_STRING | MF_CHECKED)
+        );
     }
 }

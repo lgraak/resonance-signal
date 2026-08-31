@@ -14,13 +14,18 @@ stable `0.1.0` release.
 
 ## Runtime model
 
-Launching `resonance-agent.exe` from Explorer starts a user-session tray
-process and the loopback consumer service on `127.0.0.1:48480`. The tray owns
-the service lifecycle. Its menu reports the observed service state, shows the
-endpoint, controls the owned Start with Windows value, and provides Exit.
+Launching the Windows GUI-subsystem `resonance-agent.exe` from Explorer starts
+a user-session tray process and the loopback consumer service on
+`127.0.0.1:48480` without allocating a console. The tray owns the service
+lifecycle. Its menu reports the observed service state, shows the endpoint,
+controls Info/Debug logging and the diagnostics folder, controls the owned
+Start with Windows value, and provides Exit.
 
-The explicit `serve` and `capture` modes remain console diagnostics. `--tray`
-is accepted as the explicit tray mode used by Windows startup registration.
+The Windows console-subsystem `resonance-agent-cli.exe` retains `--help`,
+`--version`, `serve`, and `capture` diagnostics. Separating the PE subsystem
+entry points preserves synchronous terminal output while keeping normal tray
+launch console-free. `--tray` remains the explicit tray mode accepted by
+`resonance-agent.exe` for Windows startup registration.
 
 Startup failures and lifecycle diagnostics are appended to:
 
@@ -28,9 +33,23 @@ Startup failures and lifecycle diagnostics are appended to:
 %LOCALAPPDATA%\Resonance Signal\logs\resonance-signal.log
 ```
 
-The log is truncated when it reaches 1 MiB. It contains process/service
-lifecycle and listener errors only. It does not contain audio samples, native
-endpoint IDs, registry identity contents, credentials, or network telemetry.
+The current log rotates before exceeding 1 MiB and retains two bounded history
+files, for at most approximately 3 MiB of log content:
+
+```text
+resonance-signal.log
+resonance-signal.1.log
+resonance-signal.2.log
+```
+
+Info is the first-run and malformed-setting fallback. Debug is selected from
+the tray and persists in `%LOCALAPPDATA%\Resonance Signal\settings.json`.
+Lifecycle, listener, discovery, capture/session, panic, shutdown, and bounded
+technical evidence are recorded according to that level. Logs do not contain
+audio samples, native endpoint IDs, registry identity contents, credentials,
+secrets, or per-frame waveform activity. Rust panics are recorded when the
+panic hook runs; native process termination that bypasses Rust panic handling
+cannot be captured by this architecture.
 
 ## Start with Windows
 
@@ -67,16 +86,18 @@ The script runs a locked optimized build and creates:
 dist\
   resonance-signal-0.1.0-beta.1-windows-x64\
     resonance-agent.exe
+    resonance-agent-cli.exe
     LICENSE.txt
     README.txt
   resonance-signal-0.1.0-beta.1-windows-x64.zip
 ```
 
-The script reads the `resonance-agent` version from Cargo metadata, builds the
-release executable, and requires its `--version` output to match before naming
-the directory and archive. `dist/` is generated release output and is excluded
-from Git. Publish versioned ZIP assets through GitHub Releases; do not commit
-them to the source repository.
+The script reads the `resonance-agent` version from Cargo metadata, builds both
+release executables, requires `resonance-agent-cli.exe --version` to match, and
+verifies the GUI and console PE subsystem values before naming the directory
+and archive. `dist/` is generated release output and is excluded from Git.
+Publish versioned ZIP assets through GitHub Releases; do not commit them to the
+source repository.
 
 The intended first-beta publication shape is documented but not yet created:
 
@@ -95,7 +116,7 @@ developer temporary files.
 Validate the extracted package rather than the executable in `target/`:
 
 1. Extract the ZIP to a new temporary directory outside the repository.
-2. Run `resonance-agent.exe --version`, confirm `0.1.0-beta.1`, and retain
+2. Run `resonance-agent-cli.exe --version`, confirm `0.1.0-beta.1`, and retain
    that output with any tester report.
 3. Launch `resonance-agent.exe` as a normal user.
 4. Confirm the Resonance Signal notification-area icon and menu appear.
@@ -105,12 +126,16 @@ Validate the extracted package rather than the executable in `target/`:
    `listener_scope: loopback`.
 7. Request `/v1/sources` and confirm a portable source snapshot is returned.
 8. Connect a waveform consumer and confirm lifecycle plus `RSWF` frames.
-9. Select Start with Windows; inspect the owned HKCU value and confirm it
+9. Select **Open Diagnostics Folder** and confirm Explorer opens the current
+   log directory without PowerShell, cmd, or Windows Terminal.
+10. Select Debug, restart, and confirm the preference plus additional bounded
+    lifecycle evidence persist; return to Info for the final default state.
+11. Select Start with Windows; inspect the owned HKCU value and confirm it
    exactly names the packaged executable.
-10. Select Start with Windows again; confirm the owned value is absent.
-11. Select Exit; confirm the process terminates, the listener closes, and the
+12. Select Start with Windows again; confirm the owned value is absent.
+13. Select Exit; confirm the process terminates, the listener closes, and the
     consumer session ends.
-12. Relaunch once and repeat the status and endpoint checks.
+14. Relaunch once and repeat the status and endpoint checks.
 
 Do not reboot solely to validate registration. Leave Start with Windows
 disabled unless the user explicitly wants it enabled after acceptance.
@@ -130,7 +155,11 @@ disabled unless the user explicitly wants it enabled after acceptance.
 - `/v1/status`, `/v1/sources`, and `/v1/waveform` work from the package
 - listener remains loopback-only and `0.0.0.0` remains rejected
 - Exit closes active sessions and releases port 48480
-- package contains only the executable, license, and beta README
+- package contains only the tray executable, console executable, license, and
+  beta README
+- tray executable is GUI-subsystem and console executable is console-subsystem
+- Info/Debug preference, bounded rotation, panic formatting, and orderly exit
+  evidence are verified
 - diagnostics contain no audio, private endpoint identity, or secrets
 
 ## Branding resources
@@ -146,9 +175,9 @@ assets/branding/resonance-signal-banner.png
 ```
 
 The Windows build embeds the application and tray ICO resources directly in
-`resonance-agent.exe`. The release ZIP therefore remains limited to the
-executable, license, and beta README; it has no runtime dependency on the
-source-tree artwork.
+`resonance-agent.exe`. The release ZIP therefore remains limited to the tray
+and CLI executables, license, and beta README; it has no runtime dependency on
+the source-tree artwork.
 
 ## Current limitations
 

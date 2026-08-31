@@ -187,7 +187,7 @@ These agent-only state and policy decisions do not change `resonance-core` or `r
 On Windows, a ten-second evidence run is:
 
 ```text
-cargo run -p resonance-agent -- --duration-seconds 10
+cargo run -p resonance-agent --bin resonance-agent-cli -- capture --duration-seconds 10
 ```
 
 The executable prints lifecycle events and a final measurement summary while data events flow through the same provider-event callback without dumping sample buffers: native and accepted format, buffer and packet frame sizes, packet and source-frame counts, callback intervals, packet-read duration, QPC deltas, initial-discontinuity observation, and terminal lifecycle reason. This output is a human diagnostic client of the capture boundary, not the permanent API. End-to-end latency remains unmeasured because the implementation does not correlate the QPC clock to the consumer observation clock. Real-device results are observational and are not part of the hardware-independent test suite.

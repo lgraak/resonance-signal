@@ -4,6 +4,28 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Get-PeSubsystem {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $stream = [System.IO.File]::OpenRead($Path)
+    $reader = [System.IO.BinaryReader]::new($stream)
+    try {
+        $stream.Position = 0x3c
+        $peOffset = $reader.ReadInt32()
+        $stream.Position = $peOffset
+        if ($reader.ReadUInt32() -ne 0x00004550) {
+            throw "PE signature is missing from '$Path'."
+        }
+        $stream.Position = $peOffset + 4 + 20 + 68
+        return $reader.ReadUInt16()
+    }
+    finally {
+        $reader.Dispose()
+        $stream.Dispose()
+    }
+}
+
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if ([string]::IsNullOrWhiteSpace($OutputRoot)) {
     $OutputRoot = Join-Path $repositoryRoot 'dist'
@@ -41,7 +63,14 @@ try {
     }
 
     $releaseExecutable = Join-Path $repositoryRoot 'target\release\resonance-agent.exe'
-    $actualVersionOutput = (& $releaseExecutable --version) -join [System.Environment]::NewLine
+    $releaseCliExecutable = Join-Path $repositoryRoot 'target\release\resonance-agent-cli.exe'
+    if ((Get-PeSubsystem -Path $releaseExecutable) -ne 2) {
+        throw 'resonance-agent.exe must use the Windows GUI subsystem for console-free tray launch.'
+    }
+    if ((Get-PeSubsystem -Path $releaseCliExecutable) -ne 3) {
+        throw 'resonance-agent-cli.exe must use the Windows console subsystem for synchronous CLI behavior.'
+    }
+    $actualVersionOutput = (& $releaseCliExecutable --version) -join [System.Environment]::NewLine
     if ($LASTEXITCODE -ne 0) {
         throw "Built executable version check failed with exit code $LASTEXITCODE."
     }
@@ -66,6 +95,7 @@ try {
 
     New-Item -ItemType Directory -Path $packageDirectory | Out-Null
     Copy-Item -LiteralPath $releaseExecutable -Destination $packageDirectory
+    Copy-Item -LiteralPath $releaseCliExecutable -Destination $packageDirectory
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'LICENSE') -Destination (Join-Path $packageDirectory 'LICENSE.txt')
     Copy-Item -LiteralPath (Join-Path $repositoryRoot 'packaging\windows-beta\README.txt') -Destination (Join-Path $packageDirectory 'README.txt')
     Compress-Archive -Path (Join-Path $packageDirectory '*') -DestinationPath $archivePath -CompressionLevel Optimal

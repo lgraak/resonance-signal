@@ -17,6 +17,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::{mpsc, Notify};
 
+use crate::diagnostics;
 use crate::protocol::{
     discovery_json, service_error_json, startup_error_json, EncodedEvent, SessionEncoder,
     PROTOCOL_VERSION,
@@ -84,6 +85,11 @@ pub struct ManagedService {
 
 impl ManagedService {
     pub fn start(config: AgentServiceConfig) -> Result<Self, String> {
+        diagnostics::set_lifecycle_state("service_starting");
+        diagnostics::info(&format!(
+            "service_startup_attempt listener={} protocol_version={PROTOCOL_VERSION}",
+            config.listen()
+        ));
         let state = Arc::new(Mutex::new(ManagedServiceState::Starting));
         let shutting_down = Arc::new(AtomicBool::new(false));
         let shutdown_notify = Arc::new(Notify::new());
@@ -113,27 +119,37 @@ impl ManagedService {
                 drop(current);
                 let _ = stopped_tx.send(());
             })
-            .map_err(|error| format!("failed to start service worker: {error}"))?;
+            .map_err(|error| {
+                let message = format!("failed to start service worker: {error}");
+                diagnostics::info(&format!("service_worker_start_failed error={message}"));
+                message
+            })?;
 
         match started_rx.recv_timeout(SERVICE_START_TIMEOUT) {
-            Ok(Ok(())) => Ok(Self {
-                state,
-                shutting_down,
-                shutdown_notify,
-                stopped_rx,
-                worker: Some(worker),
-            }),
+            Ok(Ok(())) => {
+                diagnostics::set_lifecycle_state("service_running");
+                Ok(Self {
+                    state,
+                    shutting_down,
+                    shutdown_notify,
+                    stopped_rx,
+                    worker: Some(worker),
+                })
+            }
             Ok(Err(message)) => {
                 let _ = worker.join();
+                diagnostics::set_lifecycle_state("service_startup_failed");
+                diagnostics::info(&format!("service_startup_failed error={message}"));
                 Err(message)
             }
             Err(error) => {
                 shutting_down.store(true, Ordering::Release);
                 shutdown_notify.notify_one();
                 let _ = worker.join();
-                Err(format!(
-                    "service startup did not complete within 5 seconds: {error}"
-                ))
+                let message = format!("service startup did not complete within 5 seconds: {error}");
+                diagnostics::set_lifecycle_state("service_startup_failed");
+                diagnostics::info(&format!("service_startup_failed error={message}"));
+                Err(message)
             }
         }
     }
@@ -149,6 +165,8 @@ impl ManagedService {
         if self.worker.is_none() {
             return Ok(());
         }
+        diagnostics::set_lifecycle_state("service_stopping");
+        diagnostics::info("service_shutdown_requested");
         {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
             if matches!(
@@ -169,8 +187,15 @@ impl ManagedService {
                 .map_err(|_| "service worker panicked during shutdown".to_string())?;
         }
         match self.state() {
-            ManagedServiceState::Failed(message) => Err(message),
-            _ => Ok(()),
+            ManagedServiceState::Failed(message) => {
+                diagnostics::info(&format!("service_shutdown_failed error={message}"));
+                Err(message)
+            }
+            _ => {
+                diagnostics::set_lifecycle_state("service_stopped");
+                diagnostics::info("service_shutdown_completed");
+                Ok(())
+            }
         }
     }
 }
@@ -211,17 +236,42 @@ pub fn run(config: AgentServiceConfig) -> Result<(), String> {
 }
 
 pub async fn serve(config: AgentServiceConfig) -> Result<(), String> {
+    diagnostics::set_lifecycle_state("service_starting");
+    diagnostics::info(&format!(
+        "service_startup_attempt listener={} protocol_version={PROTOCOL_VERSION}",
+        config.listen()
+    ));
     let state = AppState::new();
     let app = router(state.clone());
-    let listener = tokio::net::TcpListener::bind(config.listen())
-        .await
-        .map_err(|error| format!("failed to bind {}: {error}", config.listen()))?;
-    let local = listener
-        .local_addr()
-        .map_err(|error| format!("failed to inspect listener address: {error}"))?;
+    let listener = match tokio::net::TcpListener::bind(config.listen()).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            diagnostics::set_lifecycle_state("service_startup_failed");
+            diagnostics::info(&format!(
+                "loopback_bind_failed error_kind={:?}",
+                error.kind()
+            ));
+            return Err(format!("failed to bind {}: {error}", config.listen()));
+        }
+    };
+    let local = match listener.local_addr() {
+        Ok(local) => local,
+        Err(error) => {
+            diagnostics::set_lifecycle_state("service_startup_failed");
+            diagnostics::info(&format!(
+                "loopback_listener_inspection_failed error_kind={:?}",
+                error.kind()
+            ));
+            return Err(format!("failed to inspect listener address: {error}"));
+        }
+    };
     if !local.ip().is_loopback() {
+        diagnostics::set_lifecycle_state("service_startup_failed");
+        diagnostics::info("loopback_bind_failed reason=resolved_non_loopback");
         return Err("listener resolved to a non-loopback address".to_string());
     }
+    diagnostics::set_lifecycle_state("service_running");
+    diagnostics::info(&format!("loopback_bind_succeeded listener={local}"));
     println!("Resonance Signal consumer service listening on http://{local}/v1/");
 
     let shutdown_state = state.clone();
@@ -233,7 +283,10 @@ pub async fn serve(config: AgentServiceConfig) -> Result<(), String> {
             shutdown_state.shutting_down.store(true, Ordering::Release);
         })
         .await
-        .map_err(|error| format!("consumer service failed: {error}"))
+        .map_err(|error| format!("consumer service failed: {error}"))?;
+    diagnostics::set_lifecycle_state("service_stopped");
+    diagnostics::info("service_shutdown_completed reason=console_signal");
+    Ok(())
 }
 
 fn run_managed(
@@ -254,6 +307,7 @@ fn run_managed(
                 Ok(listener) => listener,
                 Err(error) => {
                     let message = format!("failed to bind {}: {error}", config.listen());
+                    diagnostics::info(&format!("loopback_bind_failed error={message}"));
                     let _ = started_tx.send(Err(message.clone()));
                     return Err(message);
                 }
@@ -262,18 +316,20 @@ fn run_managed(
                 Ok(local) if local.ip().is_loopback() => local,
                 Ok(_) => {
                     let message = "listener resolved to a non-loopback address".to_string();
+                    diagnostics::info(&format!("loopback_bind_failed error={message}"));
                     let _ = started_tx.send(Err(message.clone()));
                     return Err(message);
                 }
                 Err(error) => {
                     let message = format!("failed to inspect listener address: {error}");
+                    diagnostics::info(&format!("loopback_bind_failed error={message}"));
                     let _ = started_tx.send(Err(message.clone()));
                     return Err(message);
                 }
             };
             *state.lock().unwrap_or_else(|error| error.into_inner()) = ManagedServiceState::Running;
             let _ = started_tx.send(Ok(()));
-            println!("Resonance Signal consumer service listening on http://{local}/v1/");
+            diagnostics::info(&format!("loopback_bind_succeeded listener={local}"));
 
             axum::serve(listener, app)
                 .with_graceful_shutdown(async move {
@@ -307,6 +363,10 @@ async fn sources(State(state): State<AppState>) -> Response {
     let snapshot = tokio::task::spawn_blocking(discover_playback_sources).await;
     match snapshot {
         Ok(Ok(snapshot)) => {
+            diagnostics::info(&format!(
+                "source_discovery_succeeded source_count={}",
+                snapshot.sources().len()
+            ));
             let sequence = state.discovery_sequence.fetch_add(1, Ordering::Relaxed);
             Json(discovery_json(
                 &snapshot,
@@ -315,11 +375,13 @@ async fn sources(State(state): State<AppState>) -> Response {
             .into_response()
         }
         Ok(Err(error)) => {
-            eprintln!("source discovery failed: {error}");
+            diagnostics::info("source_discovery_failed class=provider");
+            let _ = error;
             discovery_unavailable()
         }
         Err(error) => {
-            eprintln!("source discovery worker failed: {error}");
+            diagnostics::info("source_discovery_failed class=worker");
+            let _ = error;
             discovery_unavailable()
         }
     }
@@ -369,6 +431,9 @@ async fn waveform(
     let intent = match query.intent() {
         Ok(intent) => intent,
         Err(message) => {
+            diagnostics::debug(&format!(
+                "transport_session_rejected reason=invalid_request detail={message}"
+            ));
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({
@@ -383,6 +448,7 @@ async fn waveform(
     let session = match ActiveSession::try_acquire(state.active_sessions.clone()) {
         Some(session) => session,
         None => {
+            diagnostics::info("transport_session_rejected reason=session_limit");
             return (
                 StatusCode::SERVICE_UNAVAILABLE,
                 Json(json!({
@@ -393,6 +459,11 @@ async fn waveform(
                 .into_response();
         }
     };
+    diagnostics::info(&format!(
+        "transport_session_created selection={} active_sessions={}",
+        intent_label(&intent),
+        state.active_sessions.load(Ordering::Acquire)
+    ));
     websocket
         .max_message_size(MAX_CLIENT_MESSAGE_BYTES)
         .max_frame_size(MAX_CLIENT_MESSAGE_BYTES)
@@ -422,6 +493,10 @@ async fn stream_session(
     intent: PlaybackCaptureIntent,
     _session: ActiveSession,
 ) {
+    diagnostics::debug(&format!(
+        "transport_session_loop_started selection={}",
+        intent_label(&intent)
+    ));
     let stop = Arc::new(AtomicBool::new(false));
     let client_stop = Arc::new(AtomicBool::new(false));
     let unhealthy = Arc::new(AtomicBool::new(false));
@@ -445,6 +520,7 @@ async fn stream_session(
 
     loop {
         if unhealthy.load(Ordering::Acquire) {
+            diagnostics::info("transport_session_stopping reason=consumer_too_slow");
             let _ = send_json(
                 &mut socket,
                 service_error_json("consumer_too_slow").to_string(),
@@ -453,6 +529,7 @@ async fn stream_session(
             break;
         }
         if state.shutting_down.load(Ordering::Acquire) {
+            diagnostics::debug("transport_session_stopping reason=provider_shutdown");
             break;
         }
 
@@ -480,6 +557,7 @@ async fn stream_session(
                     Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                     Some(Ok(Message::Pong(_))) => {}
                     Some(Ok(Message::Text(text))) if is_stop_request(&text) => {
+                        diagnostics::debug("transport_session_stop_requested source=consumer");
                         client_stop.store(true, Ordering::Release);
                         stop.store(true, Ordering::Release);
                     }
@@ -502,6 +580,7 @@ async fn stream_session(
         })),
     )
     .await;
+    diagnostics::debug("transport_session_loop_completed");
 }
 
 fn run_capture_session(
@@ -526,15 +605,18 @@ fn run_capture_session(
             },
             event => event,
         };
+        log_stream_event(&event);
         let encoded = match encoder.encode(event) {
             Ok(encoded) => encoded,
             Err(_) => {
+                diagnostics::info("transport_session_encoding_failed");
                 callback_unhealthy.store(true, Ordering::Release);
                 return;
             }
         };
         for event in encoded {
             if callback_tx.try_send(SessionMessage::Event(event)).is_err() {
+                diagnostics::debug("transport_queue_backpressure decision=terminate_session");
                 callback_unhealthy.store(true, Ordering::Release);
                 break;
             }
@@ -542,8 +624,11 @@ fn run_capture_session(
     });
 
     match supervisor.start() {
-        Ok(CaptureSupervisorStart::Started) => {}
+        Ok(CaptureSupervisorStart::Started) => {
+            diagnostics::debug("capture_supervisor_started");
+        }
         Ok(CaptureSupervisorStart::StoppedBeforeStart) | Err(_) => {
+            diagnostics::info("capture_session_start_failed class=supervisor_start");
             let _ = events_tx.try_send(SessionMessage::StartupFailure(
                 ErrorKind::Internal,
                 RetryHint::DoNotRetry,
@@ -569,6 +654,11 @@ fn run_capture_session(
 
     if !supervisor.terminal_observation().started() {
         if let Some(CaptureOwnerCompletion::Failed(error)) = supervisor.owner_completion() {
+            diagnostics::info(&format!(
+                "capture_session_start_failed kind={:?} retry={:?}",
+                error.kind(),
+                error.retry_hint()
+            ));
             let _ = events_tx.try_send(SessionMessage::StartupFailure(
                 error.kind(),
                 error.retry_hint(),
@@ -576,6 +666,34 @@ fn run_capture_session(
         }
     }
     let _ = events_tx.try_send(SessionMessage::Finished);
+    diagnostics::debug("capture_session_cleanup_completed");
+}
+
+fn intent_label(intent: &PlaybackCaptureIntent) -> &'static str {
+    match intent {
+        PlaybackCaptureIntent::DefaultPlayback => "default_playback",
+        PlaybackCaptureIntent::Explicit(_) => "explicit_source",
+    }
+}
+
+fn log_stream_event(event: &StreamEvent) {
+    match event {
+        StreamEvent::Started(descriptor) => diagnostics::info(&format!(
+            "capture_session_started sample_rate_hz={} channels={}",
+            descriptor.sample_rate().hz(),
+            descriptor.channels().channel_count().get()
+        )),
+        StreamEvent::Data(_) => {}
+        StreamEvent::Error(error) => diagnostics::info(&format!(
+            "capture_session_error kind={:?} retry={:?}",
+            error.kind(),
+            error.retry_hint()
+        )),
+        StreamEvent::Ended { reason, .. } => {
+            diagnostics::info(&format!("capture_session_stopped reason={reason:?}"))
+        }
+        _ => {}
+    }
 }
 
 async fn send_json(socket: &mut WebSocket, text: String) -> Result<(), ()> {
@@ -626,7 +744,11 @@ impl ActiveSession {
 
 impl Drop for ActiveSession {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::AcqRel);
+        let previous = self.0.fetch_sub(1, Ordering::AcqRel);
+        diagnostics::info(&format!(
+            "transport_session_cleaned_up active_sessions={}",
+            previous.saturating_sub(1)
+        ));
     }
 }
 

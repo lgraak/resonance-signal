@@ -1,6 +1,10 @@
 //! Platform capture orchestration for the Resonance Signal provider.
 
 pub mod capture;
+#[cfg(windows)]
+pub mod cli;
+#[cfg(windows)]
+pub mod diagnostics;
 pub mod protocol;
 // Discovery operations remain agent-private until a consumer transport is selected.
 #[allow(dead_code)]
